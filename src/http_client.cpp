@@ -135,7 +135,7 @@ pbi_httplib::Client &HttpClient::PrepareClient(const string &url,
   }
   client->set_address_family(AF_INET);
   client->set_follow_location(false);
-  client->set_keep_alive(false);
+  client->set_keep_alive(true);
   client->set_write_timeout(seconds, micros);
   client->set_read_timeout(seconds, micros);
   client->set_connection_timeout(seconds, micros);

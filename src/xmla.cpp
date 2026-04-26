@@ -684,8 +684,7 @@ static Value CoerceXmlValue(const std::string &raw_value,
   }
   if ((coercion_kind == XmlaCoercionKind::TIMESTAMP ||
        coercion_kind == XmlaCoercionKind::TIMESTAMP_TZ) &&
-      (TryParseTimeFromBaseDateTimestamp(temporal_source, temporal_value) ||
-       TryParseTimestampValue(temporal_source, temporal_value))) {
+      TryParseTimestampValue(temporal_source, temporal_value)) {
     return temporal_value;
   }
 

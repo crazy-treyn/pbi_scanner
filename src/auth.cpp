@@ -147,8 +147,14 @@ ResolveAccessTokenMode(const named_parameter_map_t &named_parameters) {
 }
 
 static string ResolveAzureCliMode() {
+#ifdef _WIN32
+  static constexpr const char *stderr_redirection = " 2>NUL";
+#else
+  static constexpr const char *stderr_redirection = " 2>/dev/null";
+#endif
   string command = string("az account get-access-token --scope ") +
-                   POWER_BI_SCOPE + " --query accessToken -o tsv 2>/dev/null";
+                   POWER_BI_SCOPE + " --query accessToken -o tsv" +
+                   stderr_redirection;
   auto *pipe = PBI_XMLA_POPEN(command.c_str(), "r");
   if (!pipe) {
     throw IOException("failed to invoke Azure CLI");
