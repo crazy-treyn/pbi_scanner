@@ -65,6 +65,16 @@ SELECT __pbi_scanner_test_service_principal_error_message('missing_access_token'
 ----
 service principal token response did not include access_token
 
+query T
+SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56', 'TIMESTAMP');
+----
+TIMESTAMP
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56', 'TIME');
+----
+TIME
+
 statement error
 SELECT *
 FROM dax_query(

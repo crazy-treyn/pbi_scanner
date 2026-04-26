@@ -7,6 +7,7 @@
 #include "xmla.hpp"
 
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/vector_operations/binary_executor.hpp"
@@ -88,6 +89,52 @@ static void ServicePrincipalErrorMessageTestFunction(DataChunk &args,
       });
 }
 
+static XmlaCoercionKind ParseCoercionKind(const string &kind_name) {
+  auto normalized = StringUtil::Upper(Trimmed(kind_name));
+  if (normalized == "INFER") {
+    return XmlaCoercionKind::INFER;
+  }
+  if (normalized == "VARCHAR") {
+    return XmlaCoercionKind::VARCHAR;
+  }
+  if (normalized == "BOOLEAN") {
+    return XmlaCoercionKind::BOOLEAN;
+  }
+  if (normalized == "BIGINT") {
+    return XmlaCoercionKind::BIGINT;
+  }
+  if (normalized == "UBIGINT") {
+    return XmlaCoercionKind::UBIGINT;
+  }
+  if (normalized == "DOUBLE") {
+    return XmlaCoercionKind::DOUBLE;
+  }
+  if (normalized == "DATE") {
+    return XmlaCoercionKind::DATE;
+  }
+  if (normalized == "TIME") {
+    return XmlaCoercionKind::TIME;
+  }
+  if (normalized == "TIMESTAMP") {
+    return XmlaCoercionKind::TIMESTAMP;
+  }
+  if (normalized == "TIMESTAMP_TZ") {
+    return XmlaCoercionKind::TIMESTAMP_TZ;
+  }
+  throw InvalidInputException("unknown XMLA coercion kind: " + kind_name);
+}
+
+static void CoerceXmlTypeTestFunction(DataChunk &args, ExpressionState &state,
+                                      Vector &result) {
+  BinaryExecutor::Execute<string_t, string_t, string_t>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t raw_value, string_t coercion_kind) {
+        auto kind = ParseCoercionKind(coercion_kind.GetString());
+        auto value = CoerceXmlValueForTesting(raw_value.GetString(), kind);
+        return StringVector::AddString(result, value.type().ToString());
+      });
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());
@@ -108,6 +155,10 @@ static void LoadInternal(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_service_principal_error_message",
                      {LogicalType::VARCHAR}, LogicalType::VARCHAR,
                      ServicePrincipalErrorMessageTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_coerce_xml_type",
+                     {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                     LogicalType::VARCHAR, CoerceXmlTypeTestFunction));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

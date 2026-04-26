@@ -57,6 +57,8 @@ ParseXmlaChunksForTesting(const std::vector<std::string> &chunks,
                           bool stop_after_schema = false);
 XmlaParseTestResult ParseBinXmlForTesting(const std::string &payload,
                                           bool stop_after_schema = false);
+Value CoerceXmlValueForTesting(const std::string &raw_value,
+                               XmlaCoercionKind coercion_kind);
 
 class XmlaExecutor {
 public:

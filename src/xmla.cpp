@@ -2335,6 +2335,11 @@ static std::string BuildXmlaExecuteEnvelopeForTransport(
 
 } // namespace
 
+Value CoerceXmlValueForTesting(const std::string &raw_value,
+                               XmlaCoercionKind coercion_kind) {
+  return CoerceXmlValue(raw_value, coercion_kind);
+}
+
 std::string BuildXmlaExecuteEnvelope(const std::string &catalog,
                                      const std::string &statement,
                                      const std::string &effective_user_name) {
