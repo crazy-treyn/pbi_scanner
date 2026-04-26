@@ -71,6 +71,11 @@ SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56', 'TIMESTAMP');
 TIMESTAMP
 
 query T
+SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56+00:00', 'TIMESTAMP_TZ');
+----
+TIMESTAMP WITH TIME ZONE
+
+query T
 SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56', 'TIME');
 ----
 TIME
