@@ -103,6 +103,11 @@ static HttpResponse TransformStreamResult(pbi_httplib::Result &result) {
     auto &http_response = result.value();
     response.status = http_response.status;
     response.reason = http_response.reason;
+    if (http_response.status < 200 || http_response.status >= 300) {
+      // Preserve payload details for streaming-path HTTP errors so callers can
+      // surface useful XMLA/SOAP fault diagnostics.
+      response.body = http_response.body;
+    }
     for (const auto &header : http_response.headers) {
       response.headers.emplace_back(header.first, header.second);
     }
