@@ -1,0 +1,14 @@
+build/
+.venv/
+.cache/
+.DS_Store
+*.duckdb_extension
+*.pyc
+__pycache__/
+
+# Local-only benchmark/test material (never commit real workspace data)
+/local/**
+!/local/README.md
+.env
+.envrc
+*.local.env

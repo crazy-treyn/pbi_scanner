@@ -1,0 +1,25 @@
+# Local tooling and benchmark scripts (not the DuckDB C++ extension build).
+# Run Python with uv, e.g. `uv run bench_native_http.py --smoke`
+# or `uv run --group bench query_semantic_model_minimal.py`.
+
+[project]
+name = "pbi-scanner"
+version = "0.0.0"
+requires-python = ">=3.10"
+description = "Helper scripts and benchmarks for the pbi_scanner DuckDB extension"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = []
+
+[dependency-groups]
+bench = [
+	"duckdb==1.5.1",
+	"pyarrow",
+	"polars"
+]
+format = [
+	"black>=24",
+]
+tidy = [
+	"clang-tidy",
+]

@@ -1,0 +1,113 @@
+# name: test/sql/pbi_scanner.test
+# description: test pbi_scanner extension bootstrap
+# group: [sql]
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+0
+
+require pbi_scanner
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+1
+
+query I
+SELECT __pbi_scanner_test_parse_chunked_double(
+    '<?xml version="1.0" encoding="utf-8"?><root><schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:schema><xsd:complexType name="row"><xsd:sequence><xsd:element name="Rate" type="xsd:double" /></xsd:sequence></xsd:complexType></xsd:schema></schema><row><Rate>1.125E2</Ra',
+    'te></row></root>'
+);
+----
+112.5
+
+query I
+SELECT __pbi_scanner_test_parse_binxml_double(
+    '0f01010001ff0000000000040072006f006f00740000000201b40000000000060073006300680065006d006100000002419b00000000000b0063006f006d0070006c0065007800540079007000650000001900000006000004006e0061006d00650000000501030072006f00770002415b0000000000070065006c0065006d0065006e00740000004200000046000004006e0061006d006500000005010400520061007400650006000004007400790070006500000005010a007800730064003a0064006f00750062006c00650003040401310000000000030072006f007700000002011e000000000004005200610074006500000002050105003100310032002e00350004040400'
+);
+----
+112.5
+
+query I
+SELECT __pbi_scanner_test_parse_binxml_double(
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803040000000000205c40f7f7f7'
+);
+----
+112.5
+
+query I
+SELECT CAST(__pbi_scanner_test_metadata_cache_roundtrip() AS INTEGER);
+----
+1
+
+query T
+SELECT __pbi_scanner_test_service_principal_error_message('request_error');
+----
+service principal token request failed: simulated_request_error
+
+query T
+SELECT __pbi_scanner_test_service_principal_error_message('http_error');
+----
+service principal token request http 401: denied
+
+query T
+SELECT __pbi_scanner_test_service_principal_error_message('invalid_json');
+----
+service principal token response was not valid JSON
+
+query T
+SELECT __pbi_scanner_test_service_principal_error_message('missing_access_token');
+----
+service principal token response did not include access_token
+
+statement error
+SELECT *
+FROM dax_query(
+    'Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+Data Source is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)',
+    secret_name := ''
+);
+----
+secret_name must not be empty
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=one;',
+    'EVALUATE ROW("x", 1)',
+    secret_name := 'two'
+);
+----
+secret_name named parameter conflicts with Secret in the connection string
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+access_token named parameter or PBI_XMLA_ACCESS_TOKEN environment variable is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+access_token named parameter or PBI_XMLA_ACCESS_TOKEN environment variable is required
