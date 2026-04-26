@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -31,9 +32,35 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote_plus
 from urllib.request import Request, urlopen
 
-os.environ.setdefault("PBI_SCANNER_DEBUG_TIMINGS", "1")
-
 REPO = Path(__file__).resolve().parent
+
+
+def _load_local_env_file() -> None:
+    env_path = REPO / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = raw_value.strip()
+        if value and value[0] in {"'", '"'}:
+            try:
+                # Match shell-style quoted values in .env.
+                parsed = shlex.split(f"placeholder={value}", posix=True)
+                if parsed and "=" in parsed[0]:
+                    _, value = parsed[0].split("=", 1)
+            except ValueError:
+                pass
+        os.environ.setdefault(key, value)
+
+
+_load_local_env_file()
+os.environ.setdefault("PBI_SCANNER_DEBUG_TIMINGS", "1")
 
 # Fictional placeholders only; real runs must set PBI_BENCH_* (see README).
 _DEFAULT_CONNECTION_STRING = (
