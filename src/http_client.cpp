@@ -97,6 +97,21 @@ static HttpResponse TransformResult(pbi_httplib::Result &result) {
   return response;
 }
 
+static HttpResponse TransformStreamResult(pbi_httplib::Result &result) {
+  HttpResponse response;
+  if (result.error() == pbi_httplib::Error::Success) {
+    auto &http_response = result.value();
+    response.status = http_response.status;
+    response.reason = http_response.reason;
+    for (const auto &header : http_response.headers) {
+      response.headers.emplace_back(header.first, header.second);
+    }
+  } else {
+    response.request_error = std::to_string(static_cast<int>(result.error()));
+  }
+  return response;
+}
+
 } // namespace
 
 std::string HttpResponse::GetHeader(const std::string &name) const {
@@ -135,7 +150,10 @@ pbi_httplib::Client &HttpClient::PrepareClient(const string &url,
   }
   client->set_address_family(AF_INET);
   client->set_follow_location(false);
-  client->set_keep_alive(true);
+  // Keep-alive caused a severe XMLA streaming regression in real benchmarks
+  // (first row stalled ~40s vs ~2s without keep-alive), so force fresh
+  // connections for now.
+  client->set_keep_alive(false);
   client->set_write_timeout(seconds, micros);
   client->set_read_timeout(seconds, micros);
   client->set_connection_timeout(seconds, micros);
@@ -225,10 +243,10 @@ HttpResponse HttpClient::PostStream(
         }
         return should_continue;
       });
+  auto response = TransformStreamResult(result);
   auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - started_at)
                         .count();
-  auto response = TransformResult(result);
   response.streamed_bytes = received_bytes;
   response.streamed_chunks = received_chunks;
   response.first_byte_ms = first_byte_ms;
