@@ -538,16 +538,22 @@ def _run_metadata_probe_profile(
         results[name]["stage"] = "content"
         print(f"[metadata][PASS][{profile_name}][{name}][content] checks passed")
         if print_rows_enabled:
-            display_relation = con.sql(
-                f"SELECT * FROM {source_sql} LIMIT {display_sample_rows}"
-            )
-            display_df = display_relation.pl()
-            print(
-                f"[metadata][ROWS][{profile_name}][{name}] "
-                f"showing top {display_df.height} rows (limit={display_sample_rows})"
-            )
-            if display_df.height > 0:
-                print(display_df)
+            try:
+                display_relation = con.sql(
+                    f"SELECT * FROM {source_sql} LIMIT {display_sample_rows}"
+                )
+                display_df = display_relation.pl()
+                print(
+                    f"[metadata][ROWS][{profile_name}][{name}] "
+                    f"showing top {display_df.height} rows (limit={display_sample_rows})"
+                )
+                if display_df.height > 0:
+                    print(display_df)
+            except Exception as exc:
+                print(
+                    f"[metadata][WARN][{profile_name}][{name}] "
+                    f"display query failed (validation already passed): {exc}"
+                )
     return results
 
 

@@ -1967,6 +1967,29 @@ private:
     Fail("variable integer was too large");
   }
 
+  static bool TryReadVarUIntAt(const_data_ptr_t input, idx_t input_size,
+                               idx_t start, uint32_t &value_out,
+                               idx_t &next_offset_out) {
+    if (start >= input_size) {
+      return false;
+    }
+    uint32_t value = 0;
+    idx_t pos = start;
+    for (uint32_t shift = 0; shift <= 28; shift += 7) {
+      if (pos >= input_size) {
+        return false;
+      }
+      auto byte = static_cast<uint8_t>(input[pos++]);
+      value |= static_cast<uint32_t>(byte & 0x7F) << shift;
+      if ((byte & 0x80) == 0) {
+        value_out = value;
+        next_offset_out = pos;
+        return true;
+      }
+    }
+    return false;
+  }
+
   uint64_t ReadUInt64() {
     Ensure(8);
     uint64_t result = 0;
@@ -2212,8 +2235,19 @@ private:
       ParseStartElement();
       return;
     case 0x01:
-      // Observed in strict SX metadata payloads between EMPTY_TEXT and end.
-      // Treat as control marker without changing element depth.
+      // 0x01 can appear both as a compact start-element token and as a control
+      // marker in some strict SX metadata payloads. Disambiguate by probing the
+      // following varuint as a valid known name id.
+      {
+        uint32_t maybe_name_id = 0;
+        idx_t next_offset = offset;
+        if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
+            (names_by_id.find(maybe_name_id) != names_by_id.end() ||
+             (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
+          ParseStartElement();
+          return;
+        }
+      }
       FlushPendingStart();
       return;
     case 0xF6:
@@ -2401,12 +2435,33 @@ static bool IsRecoverableEarlyFramingError(const Exception &ex,
     return false;
   }
   auto message = StringUtil::Lower(ex.what());
+  auto offset_pos = message.find("offset ");
+  if (offset_pos == std::string::npos) {
+    return false;
+  }
+  offset_pos += 7;
+  auto end_pos = offset_pos;
+  while (end_pos < message.size() && message[end_pos] >= '0' &&
+         message[end_pos] <= '9') {
+    end_pos++;
+  }
+  if (end_pos == offset_pos) {
+    return false;
+  }
+  idx_t parser_offset = 0;
+  try {
+    parser_offset = static_cast<idx_t>(
+        std::stoull(message.substr(offset_pos, end_pos - offset_pos)));
+  } catch (...) {
+    return false;
+  }
+  if (parser_offset >= 8) {
+    return false;
+  }
   return message.find("unsupported token 0xdf at offset 0") != std::string::npos ||
          message.find("unsupported token 0xfe at offset") != std::string::npos ||
          message.find("encountered ssas record token") != std::string::npos ||
-         message.find("ssas binary xml unsupported token") != std::string::npos ||
-         message.find("ssas binary xml unsupported token 0xdf at offset 0") !=
-             std::string::npos;
+         message.find("ssas binary xml unsupported token") != std::string::npos;
 }
 
 static void ParseBinXmlResponse(const std::string &payload,
