@@ -87,6 +87,23 @@ SELECT __pbi_scanner_test_coerce_xml_type('1899-12-30T12:34:56', 'TIME');
 ----
 TIME
 
+query I
+SELECT length(__pbi_scanner_test_coerce_xml_text('', 'VARCHAR'));
+----
+0
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('', 'INFER');
+----
+<NULL>
+
+query T
+SELECT __pbi_scanner_test_effective_execution_transport(
+    'EVALUATE INFO.VIEW.TABLES()'
+);
+----
+sx_xpress
+
 statement error
 SELECT *
 FROM dax_query(

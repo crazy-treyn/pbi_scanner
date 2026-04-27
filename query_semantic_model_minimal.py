@@ -12,6 +12,7 @@ Configuration (prefer env vars so nothing secret is hardcoded):
   PBI_BENCH_METADATA_FAIL_FAST — optional; stop on first metadata failure
   PBI_BENCH_METADATA_MIN_ROWS — optional; minimum rows for tables/columns (default 1)
   PBI_BENCH_METADATA_PRINT_ROWS — optional; print sampled metadata rows (default on; set 0/false/no/off to disable)
+  PBI_BENCH_METADATA_SAMPLE_ROWS — optional; metadata display sample size (default 100)
   PBI_BENCH_METADATA_MATRIX — optional; run metadata probes across transport profiles
   PBI_BENCH_METADATA_INCLUDE_PLAIN — optional; include plain transport in matrix mode
   PBI_BENCH_METADATA_STRICT_SX — optional; enforce sx_xpress primary pass (soft-fail becomes hard-fail)
@@ -84,7 +85,8 @@ _DEFAULT_CONNECTION_STRING = (
 _DEFAULT_DAX = 'EVALUATE ROW("x", 1)'
 _SAMPLE_ROWS = 100
 _POWER_BI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
-_METADATA_SAMPLE_ROWS = 5
+_METADATA_VALIDATION_SAMPLE_ROWS = 5
+_METADATA_DISPLAY_SAMPLE_ROWS_DEFAULT = 100
 _METADATA_FUNCTION_NAMES = (
     "pbi_tables",
     "pbi_columns",
@@ -287,6 +289,19 @@ def _env_flag_default_on(name: str, default: str = "1") -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _metadata_display_sample_rows() -> int:
+    raw_value = os.environ.get(
+        "PBI_BENCH_METADATA_SAMPLE_ROWS", str(_METADATA_DISPLAY_SAMPLE_ROWS_DEFAULT)
+    ).strip()
+    if not raw_value:
+        return _METADATA_DISPLAY_SAMPLE_ROWS_DEFAULT
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return _METADATA_DISPLAY_SAMPLE_ROWS_DEFAULT
+    return max(1, parsed)
+
+
 def _default_xmla_transport() -> str:
     return os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "sx_xpress").strip() or "sx_xpress"
 
@@ -369,10 +384,10 @@ def _metadata_checks(min_rows: int) -> list[dict[str, object]]:
         {
             "name": "pbi_measures",
             "required_groups": [
-                {"measure"},
+                {"name", "measure", "measurename"},
             ],
             "non_empty_groups": [
-                {"measure", "measurename"},
+                {"name", "measure", "measurename"},
                 {"expression", "formula"},
             ],
             # Some models have no measures; default to informative pass at 0 rows.
@@ -417,6 +432,7 @@ def _run_metadata_probe_profile(
     checks: list[dict[str, object]],
     fail_fast: bool,
     print_rows_enabled: bool,
+    display_sample_rows: int,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
     os.environ["PBI_SCANNER_XMLA_TRANSPORT"] = transport
@@ -461,7 +477,9 @@ def _run_metadata_probe_profile(
 
         shape_started_at = perf_counter()
         try:
-            relation = con.sql(f"SELECT * FROM {source_sql} LIMIT {_METADATA_SAMPLE_ROWS}")
+            relation = con.sql(
+                f"SELECT * FROM {source_sql} LIMIT {_METADATA_VALIDATION_SAMPLE_ROWS}"
+            )
             columns = list(relation.columns)
             rows = relation.fetchall()
         except Exception as exc:
@@ -520,11 +538,16 @@ def _run_metadata_probe_profile(
         results[name]["stage"] = "content"
         print(f"[metadata][PASS][{profile_name}][{name}][content] checks passed")
         if print_rows_enabled:
-            print(f"[metadata][ROWS][{profile_name}][{name}] showing up to {_METADATA_SAMPLE_ROWS} rows")
-            print(f"[metadata][COLUMNS][{profile_name}][{name}] {columns}")
-            for idx, row in enumerate(rows, start=1):
-                row_map = {column: value for column, value in zip(columns, row)}
-                print(f"[metadata][ROW {idx}][{profile_name}][{name}] {row_map}")
+            display_relation = con.sql(
+                f"SELECT * FROM {source_sql} LIMIT {display_sample_rows}"
+            )
+            display_df = display_relation.pl()
+            print(
+                f"[metadata][ROWS][{profile_name}][{name}] "
+                f"showing top {display_df.height} rows (limit={display_sample_rows})"
+            )
+            if display_df.height > 0:
+                print(display_df)
     return results
 
 
@@ -583,6 +606,7 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
     matrix_mode = _truthy_env("PBI_BENCH_METADATA_MATRIX")
     include_plain = _truthy_env("PBI_BENCH_METADATA_INCLUDE_PLAIN")
     strict_sx_mode = _truthy_env("PBI_BENCH_METADATA_STRICT_SX")
+    display_sample_rows = _metadata_display_sample_rows()
     configured_transport = _default_xmla_transport()
     if strict_sx_mode and configured_transport != "sx_xpress":
         raise RuntimeError(
@@ -599,6 +623,7 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
         "[python] metadata probe enabled "
         f"(fail_fast={'on' if fail_fast else 'off'} "
         f"min_rows_tables_columns={min_rows} "
+        f"display_sample_rows={display_sample_rows} "
         f"strict_sx={'on' if strict_sx_mode else 'off'} "
         f"matrix_mode={'on' if matrix_mode else 'off'} "
         f"profiles={','.join(profile['name'] + ':' + profile['transport'] for profile in profiles)})"
@@ -618,6 +643,7 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
                 checks,
                 fail_fast,
                 print_rows_enabled,
+                display_sample_rows,
             )
             for function_name, result in profile_results.items():
                 per_function_results.setdefault(function_name, {})[profile_name] = result
@@ -631,22 +657,30 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
     pass_lines, soft_fail_lines, hard_fail_lines = _classify_metadata_outcomes(
         per_function_results, profiles
     )
+    effective_pass_lines = list(pass_lines)
+    effective_soft_fail_lines = list(soft_fail_lines)
+    effective_hard_fail_lines = list(hard_fail_lines)
+    if strict_sx_mode and effective_soft_fail_lines:
+        effective_hard_fail_lines.extend(
+            [
+                f"{line} [promoted by strict_sx mode]"
+                for line in effective_soft_fail_lines
+            ]
+        )
+        effective_soft_fail_lines = []
+
     print("[metadata][SUMMARY] ----------------------------------------")
-    for line in pass_lines:
+    for line in effective_pass_lines:
         print(f"[metadata][SUMMARY][PASS] {line}")
-    for line in soft_fail_lines:
+    for line in effective_soft_fail_lines:
         print(f"[metadata][SUMMARY][SOFT_FAIL] {line}")
-    for line in hard_fail_lines:
+    for line in effective_hard_fail_lines:
         print(f"[metadata][SUMMARY][HARD_FAIL] {line}")
     print(
         "[metadata][SUMMARY] counts: "
-        f"pass={len(pass_lines)} soft_fail={len(soft_fail_lines)} hard_fail={len(hard_fail_lines)}"
+        f"pass={len(effective_pass_lines)} soft_fail={len(effective_soft_fail_lines)} "
+        f"hard_fail={len(effective_hard_fail_lines)}"
     )
-    effective_hard_fail_lines = list(hard_fail_lines)
-    if strict_sx_mode and soft_fail_lines:
-        effective_hard_fail_lines.extend(
-            [f"{line} [promoted by strict_sx mode]" for line in soft_fail_lines]
-        )
     if effective_hard_fail_lines:
         print(
             "[metadata][SUMMARY] rerun hint: "

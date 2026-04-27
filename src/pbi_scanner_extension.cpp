@@ -153,6 +153,31 @@ static void CoerceXmlTypeTestFunction(DataChunk &args, ExpressionState &state,
       });
 }
 
+static void CoerceXmlTextTestFunction(DataChunk &args, ExpressionState &state,
+                                      Vector &result) {
+  BinaryExecutor::Execute<string_t, string_t, string_t>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t raw_value, string_t coercion_kind) {
+        auto kind = ParseCoercionKind(coercion_kind.GetString());
+        auto value = CoerceXmlValueForTesting(raw_value.GetString(), kind);
+        if (value.IsNull()) {
+          return StringVector::AddString(result, "<NULL>");
+        }
+        return StringVector::AddString(result, value.ToString());
+      });
+}
+
+static void EffectiveExecutionTransportTestFunction(DataChunk &args,
+                                                    ExpressionState &state,
+                                                    Vector &result) {
+  UnaryExecutor::Execute<string_t, string_t>(
+      args.data[0], result, args.size(), [&](string_t statement) {
+        auto transport =
+            EffectiveExecutionTransportForTesting(statement.GetString());
+        return StringVector::AddString(result, transport);
+      });
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());
@@ -180,6 +205,14 @@ static void LoadInternal(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_coerce_xml_type",
                      {LogicalType::VARCHAR, LogicalType::VARCHAR},
                      LogicalType::VARCHAR, CoerceXmlTypeTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_coerce_xml_text",
+                     {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                     LogicalType::VARCHAR, CoerceXmlTextTestFunction));
+  loader.RegisterFunction(ScalarFunction(
+      "__pbi_scanner_test_effective_execution_transport",
+      {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+      EffectiveExecutionTransportTestFunction));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

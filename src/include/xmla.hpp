@@ -59,6 +59,7 @@ XmlaParseTestResult ParseBinXmlForTesting(const std::string &payload,
                                           bool stop_after_schema = false);
 Value CoerceXmlValueForTesting(const std::string &raw_value,
                                XmlaCoercionKind coercion_kind);
+std::string EffectiveExecutionTransportForTesting(const std::string &statement);
 
 class XmlaExecutor {
 public:

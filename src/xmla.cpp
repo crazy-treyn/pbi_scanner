@@ -11,12 +11,14 @@
 
 #include <cerrno>
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -632,6 +634,13 @@ static Value CoerceXmlValue(const std::string &raw_value,
   }
   TrimString(body);
   if (body.empty()) {
+    if (coercion_kind == XmlaCoercionKind::VARCHAR) {
+      return Value(std::string());
+    }
+    if (coercion_kind == XmlaCoercionKind::BOOLEAN) {
+      // SSAS binary metadata frequently encodes false booleans as empty text.
+      return Value::BOOLEAN(false);
+    }
     return Value();
   }
 
@@ -1402,6 +1411,22 @@ private:
   static constexpr uint8_t BOOL_TYPE = 0x0D;
   static constexpr uint8_t BINXML_TYPE = 0x21;
 
+  static bool IsSsasRecordFamilyToken(uint8_t token) {
+    switch (token) {
+    case 0xF0:
+    case 0xFD:
+    case 0xFE:
+    case 0xEF:
+    case 0xF8:
+    case 0xF6:
+    case 0xF5:
+    case 0xF7:
+      return true;
+    default:
+      return false;
+    }
+  }
+
   static uint8_t BaseToken(uint8_t token) { return token & TOKEN_MASK; }
   static bool HasMore(uint8_t token) { return (token & MORE_BIT) != 0; }
   static idx_t SkipNestedDfPreamble(const std::string &payload) {
@@ -1838,6 +1863,10 @@ private:
 
   void ParseToken(uint8_t token) {
     auto token_offset = offset - 1;
+    if (IsSsasRecordFamilyToken(token)) {
+      throw IOException("BINXML encountered SSAS record token 0x%02x at offset %llu",
+                        token, static_cast<unsigned long long>(token_offset));
+    }
     auto base = BaseToken(token);
     if (base == FRAGMENT_HEADER_TOKEN) {
       ParseFragmentHeader();
@@ -1885,12 +1914,18 @@ public:
 
 private:
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
+  static constexpr idx_t MEASURE_TRACE_LIMIT = 200;
 
   struct ExpandedName {
     std::string prefix;
     std::string local_name;
     std::string uri;
   };
+
+  static bool DebugSsasMeasuresEnabled() {
+    auto *value = std::getenv("PBI_SCANNER_DEBUG_SSAS_MEASURES");
+    return value && *value;
+  }
 
   [[noreturn]] void Fail(const char *message) const {
     throw IOException("SSAS binary XML %s at offset %llu", message,
@@ -2021,6 +2056,10 @@ private:
   }
 
   const ExpandedName &LookupName(uint32_t id) const {
+    auto mapped = names_by_id.find(id);
+    if (mapped != names_by_id.end()) {
+      return mapped->second;
+    }
     if (id == 0 || id > names.size()) {
       throw IOException("SSAS binary XML name id %llu was not defined",
                         static_cast<unsigned long long>(id));
@@ -2030,9 +2069,22 @@ private:
 
   void DefineName() {
     ExpandedName name;
-    auto uri_id = ReadVarUInt();
-    auto prefix_id = ReadVarUInt();
-    auto local_id = ReadVarUInt();
+    auto first = ReadVarUInt();
+    uint32_t name_id = static_cast<uint32_t>(names.size() + 1);
+    uint32_t uri_id;
+    uint32_t prefix_id;
+    uint32_t local_id;
+    if (first > strings.size() + 1) {
+      // Some SSAS streams emit an explicit sparse NameId before URI/Prefix/Local.
+      name_id = first;
+      uri_id = ReadVarUInt();
+      prefix_id = ReadVarUInt();
+      local_id = ReadVarUInt();
+    } else {
+      uri_id = first;
+      prefix_id = ReadVarUInt();
+      local_id = ReadVarUInt();
+    }
     if (prefix_id != 0) {
       name.prefix = LookupString(prefix_id);
     }
@@ -2044,7 +2096,8 @@ private:
     if (uri_id != 0) {
       name.uri = LookupString(uri_id);
     }
-    names.push_back(std::move(name));
+    names.push_back(name);
+    names_by_id[name_id] = std::move(name);
   }
 
   std::string NameText(uint32_t name_id) const {
@@ -2073,6 +2126,7 @@ private:
       return FormatDouble(ReadDouble());
     case 0x08:
       return std::to_string(static_cast<int64_t>(ReadUInt64()));
+    case 0x10:
     case 0x0E:
     case 0x11:
       return ReadInlineUtf16Value();
@@ -2096,6 +2150,25 @@ private:
     }
     case 0x15:
       return FormatDouble(ReadDouble());
+    case 0x18:
+      return std::to_string(ReadByte());
+    case 0x19: {
+      Ensure(2);
+      auto value = static_cast<uint16_t>(data[offset] | (data[offset + 1] << 8));
+      offset += 2;
+      return std::to_string(value);
+    }
+    case 0x1A: {
+      Ensure(4);
+      auto value = static_cast<uint32_t>(data[offset]) |
+                   (static_cast<uint32_t>(data[offset + 1]) << 8) |
+                   (static_cast<uint32_t>(data[offset + 2]) << 16) |
+                   (static_cast<uint32_t>(data[offset + 3]) << 24);
+      offset += 4;
+      return std::to_string(value);
+    }
+    case 0x1B:
+      return std::to_string(ReadUInt64());
     case 0x16:
       return "true";
     case 0x17:
@@ -2116,6 +2189,7 @@ private:
   void ParseStartElement() {
     FlushPendingStart();
     pending_name = NameText(ReadVarUInt());
+    last_started_name = pending_name;
     pending_attributes.clear();
     pending_start = true;
   }
@@ -2138,9 +2212,9 @@ private:
       ParseStartElement();
       return;
     case 0x01:
-      // Some streams emit the compact open-start-element token (0x01)
-      // in addition to SSAS record token 0xF8.
-      ParseStartElement();
+      // Observed in strict SX metadata payloads between EMPTY_TEXT and end.
+      // Treat as control marker without changing element depth.
+      FlushPendingStart();
       return;
     case 0xF6:
       ParseAttribute();
@@ -2154,17 +2228,34 @@ private:
       return;
     case 0x04:
     case 0x08:
+    case 0x10:
     case 0x0E:
     case 0x11:
     case 0x12:
     case 0x13:
     case 0x14:
     case 0x15:
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
     case 0x16:
     case 0x17:
     case EMPTY_TEXT_TOKEN:
-      FlushPendingStart();
-      sink.Text(ReadTextValue(token));
+      {
+        auto cell_name = pending_start ? pending_name : last_started_name;
+        FlushPendingStart();
+        auto text = ReadTextValue(token);
+        if (DebugSsasMeasuresEnabled() && !cell_name.empty() &&
+            measure_trace_count < MEASURE_TRACE_LIMIT) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] SSAS row cell=%s token=0x%02x text_len=%llu text=\"%s\"\n",
+                       cell_name.c_str(), static_cast<unsigned int>(token),
+                       static_cast<unsigned long long>(text.size()), text.c_str());
+          measure_trace_count++;
+        }
+        sink.Text(text);
+      }
       return;
     default:
       FailUnsupported(token, token_offset);
@@ -2177,8 +2268,11 @@ private:
   XmlaStreamParser &sink;
   std::vector<std::string> strings;
   std::vector<ExpandedName> names;
+  std::unordered_map<uint32_t, ExpandedName> names_by_id;
+  idx_t measure_trace_count = 0;
   bool pending_start = false;
   std::string pending_name;
+  std::string last_started_name;
   case_insensitive_map_t<std::string> pending_attributes;
 };
 
@@ -2231,83 +2325,139 @@ static bool IsSxXpressXmlaResponse(const HttpResponse &response) {
   return content_type.find("application/sx+xpress") != std::string::npos;
 }
 
-static idx_t SkipSxDfPreamble(const std::string &payload) {
-  if (payload.empty() || static_cast<uint8_t>(payload[0]) != 0xDF) {
+static idx_t SkipSxDfPreamble(const std::string &payload, idx_t start = 0) {
+  if (start >= payload.size() || static_cast<uint8_t>(payload[start]) != 0xDF) {
     return 0;
   }
-  idx_t offset = 1;
+  idx_t offset = start + 1;
   for (uint32_t shift = 0; shift <= 28; shift += 7) {
     if (offset >= payload.size()) {
       return 0;
     }
     auto byte = static_cast<uint8_t>(payload[offset++]);
     if ((byte & 0x80) == 0) {
-      return offset;
+      return offset - start;
     }
   }
   return 0;
 }
 
 static idx_t BinXmlPayloadOffset(const std::string &payload) {
-  auto preamble_offset = SkipSxDfPreamble(payload);
-  if (preamble_offset > 0) {
-    return preamble_offset;
+  idx_t offset = 0;
+  while (offset < payload.size() &&
+         static_cast<uint8_t>(payload[offset]) == 0xDF) {
+    auto preamble_size = SkipSxDfPreamble(payload, offset);
+    if (preamble_size > 0) {
+      offset += preamble_size;
+      continue;
+    }
+    // Some payloads include a bare 0xDF marker before actual payload bytes.
+    offset++;
   }
-  if (!payload.empty() && static_cast<uint8_t>(payload[0]) == 0xDF &&
-      payload.size() > 1) {
-    // Some payloads include a bare 0xDF preamble marker before BINXML tokens.
-    return 1;
+  return offset;
+}
+
+static idx_t SkipOptionalSsasFramingMarker(const std::string &payload,
+                                           idx_t start) {
+  if (start >= payload.size() || static_cast<uint8_t>(payload[start]) != 0xB0) {
+    return start;
   }
-  return 0;
+  idx_t offset = start + 1;
+  if (offset < payload.size() &&
+      (static_cast<uint8_t>(payload[offset]) == 0x01 ||
+       static_cast<uint8_t>(payload[offset]) == 0x04)) {
+    offset++;
+  }
+  return offset;
+}
+
+static std::vector<idx_t> BuildNormalizedPayloadCandidates(
+    const std::string &payload) {
+  std::vector<idx_t> candidates;
+  candidates.push_back(0);
+
+  auto df_offset = BinXmlPayloadOffset(payload);
+  if (df_offset < payload.size()) {
+    candidates.push_back(df_offset);
+  }
+
+  const auto initial_count = candidates.size();
+  for (idx_t i = 0; i < initial_count; i++) {
+    auto framed_offset = SkipOptionalSsasFramingMarker(payload, candidates[i]);
+    if (framed_offset < payload.size()) {
+      candidates.push_back(framed_offset);
+    }
+  }
+
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                   candidates.end());
+  return candidates;
+}
+
+static bool IsRecoverableEarlyFramingError(const Exception &ex,
+                                           idx_t candidate_offset) {
+  if (candidate_offset >= 8) {
+    return false;
+  }
+  auto message = StringUtil::Lower(ex.what());
+  return message.find("unsupported token 0xdf at offset 0") != std::string::npos ||
+         message.find("unsupported token 0xfe at offset") != std::string::npos ||
+         message.find("encountered ssas record token") != std::string::npos ||
+         message.find("ssas binary xml unsupported token") != std::string::npos ||
+         message.find("ssas binary xml unsupported token 0xdf at offset 0") !=
+             std::string::npos;
 }
 
 static void ParseBinXmlResponse(const std::string &payload,
                                 XmlaStreamParser &parser) {
-  auto payload_offset = BinXmlPayloadOffset(payload);
-  auto has_prefixed_payload =
-      payload_offset > 0 && payload_offset < payload.size();
-  auto prefixed_first =
-      has_prefixed_payload ? static_cast<uint8_t>(payload[payload_offset]) : 0;
-  auto is_ssas_framed = has_prefixed_payload && prefixed_first == 0xB0;
-  std::string ssas_failure;
+  auto candidates = BuildNormalizedPayloadCandidates(payload);
+  std::string last_error_message;
+  bool have_last_error = false;
 
-  if (!payload.empty() && static_cast<uint8_t>(payload[0]) == 0xDF) {
+  for (auto offset : candidates) {
+    auto candidate_size = payload.size() - offset;
+    if (candidate_size == 0) {
+      continue;
+    }
+    auto candidate_ptr = const_data_ptr_cast(payload.data() + offset);
+
+    bool ssas_recoverable = false;
     try {
-      SsasBinaryXmlParser ssas_binxml(const_data_ptr_cast(payload.data()),
-                                      payload.size(), parser);
+      SsasBinaryXmlParser ssas_binxml(candidate_ptr, candidate_size, parser);
       ssas_binxml.ParseDocument();
       return;
     } catch (const Exception &ex) {
-      ssas_failure = ex.what();
-      // Some engines advertise SSAS binary framing but emit BINXML tokens.
-      // Fall through to BINXML parsing as a compatibility path.
-      if (has_prefixed_payload && !is_ssas_framed) {
-        BinXmlParser prefixed_binxml(
-            const_data_ptr_cast(payload.data() + payload_offset),
-            payload.size() - payload_offset, parser);
-        prefixed_binxml.ParseDocument();
-        return;
+      if (!IsRecoverableEarlyFramingError(ex, offset)) {
+        throw;
       }
+      ssas_recoverable = true;
+      have_last_error = true;
+      last_error_message = ex.what();
+    }
+
+    try {
+      BinXmlParser binxml(candidate_ptr, candidate_size, parser);
+      binxml.ParseDocument();
+      return;
+    } catch (const Exception &ex) {
+      if (!IsRecoverableEarlyFramingError(ex, offset)) {
+        throw;
+      }
+      have_last_error = true;
+      last_error_message = ex.what();
+      if (!ssas_recoverable) {
+        continue;
+      }
+      // Try next normalized candidate only for early framing/token signatures.
+      continue;
     }
   }
-  if (has_prefixed_payload && !is_ssas_framed) {
-    BinXmlParser prefixed_binxml(
-        const_data_ptr_cast(payload.data() + payload_offset),
-        payload.size() - payload_offset, parser);
-    prefixed_binxml.ParseDocument();
-    return;
+
+  if (have_last_error) {
+    throw IOException("%s", last_error_message.c_str());
   }
-  try {
-    BinXmlParser binxml(const_data_ptr_cast(payload.data()), payload.size(),
-                        parser);
-    binxml.ParseDocument();
-  } catch (const Exception &ex) {
-    if (!ssas_failure.empty()) {
-      throw IOException("SSAS binary parse failed: %s; BINXML parse failed: %s",
-                        ssas_failure.c_str(), ex.what());
-    }
-    throw;
-  }
+  throw IOException("BINXML payload was empty after normalization");
 }
 
 static bool DecodeBufferedXmlaResponse(const HttpResponse &response,
@@ -2431,27 +2581,27 @@ static std::string BuildXmlaExecuteEnvelopeForTransport(
   return envelope;
 }
 
-static XmlaTransportMode
-EffectiveExecutionTransport(const XmlaRequest &request,
-                            XmlaTransportMode configured_mode) {
-  if (configured_mode != XmlaTransportMode::SX_XPRESS) {
-    return configured_mode;
-  }
-  // INFO.VIEW metadata queries can still emit SSAS BINXML variants that are
-  // not fully decoded by the sx parser path yet. Keep strict sx_xpress for
-  // general DAX while using xpress compatibility for these metadata rowsets.
-  auto statement = StringUtil::Upper(request.statement);
-  if (statement.find("INFO.VIEW.") != std::string::npos) {
-    return XmlaTransportMode::XPRESS;
-  }
-  return configured_mode;
-}
-
 } // namespace
 
 Value CoerceXmlValueForTesting(const std::string &raw_value,
                                XmlaCoercionKind coercion_kind) {
   return CoerceXmlValue(raw_value, coercion_kind);
+}
+
+std::string EffectiveExecutionTransportForTesting(const std::string &statement) {
+  (void)statement;
+  auto mode = ResolveXmlaTransportMode();
+  switch (mode) {
+  case XmlaTransportMode::PLAIN:
+    return "plain";
+  case XmlaTransportMode::SX:
+    return "sx";
+  case XmlaTransportMode::XPRESS:
+    return "xpress";
+  case XmlaTransportMode::SX_XPRESS:
+    return "sx_xpress";
+  }
+  return "plain";
 }
 
 std::string BuildXmlaExecuteEnvelope(const std::string &catalog,
@@ -2564,12 +2714,9 @@ void XmlaExecutor::ExecuteStreaming(
         &on_schema,
     const std::function<bool(const std::vector<Value> &row)> &on_row,
     const std::function<bool()> &should_stop) {
-  auto configured_transport_mode = ResolveXmlaTransportMode();
-  auto transport_mode =
-      EffectiveExecutionTransport(request, configured_transport_mode);
-  auto envelope = BuildXmlaExecuteEnvelopeForTransport(
-      request.catalog, request.statement, request.effective_user_name,
-      transport_mode);
+  auto envelope = BuildXmlaExecuteEnvelope(request.catalog, request.statement,
+                                           request.effective_user_name);
+  auto transport_mode = ResolveXmlaTransportMode();
   auto buffer_response = transport_mode != XmlaTransportMode::PLAIN;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row);
