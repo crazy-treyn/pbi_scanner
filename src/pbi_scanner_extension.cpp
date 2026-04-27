@@ -83,8 +83,7 @@ static void ParseBinXmlFirstTextTestFunction(DataChunk &args,
           throw InvalidInputException(
               "expected exactly one parsed BINXML row with one column");
         }
-        return StringVector::AddString(result,
-                                       parsed.rows[0][0].ToString());
+        return StringVector::AddString(result, parsed.rows[0][0].ToString());
       });
 }
 
@@ -209,10 +208,10 @@ static void LoadInternal(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_coerce_xml_text",
                      {LogicalType::VARCHAR, LogicalType::VARCHAR},
                      LogicalType::VARCHAR, CoerceXmlTextTestFunction));
-  loader.RegisterFunction(ScalarFunction(
-      "__pbi_scanner_test_effective_execution_transport",
-      {LogicalType::VARCHAR}, LogicalType::VARCHAR,
-      EffectiveExecutionTransportTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_effective_execution_transport",
+                     {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                     EffectiveExecutionTransportTestFunction));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {
