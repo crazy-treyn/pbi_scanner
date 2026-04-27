@@ -1661,8 +1661,9 @@ private:
                           "offset %llu",
                           static_cast<unsigned long long>(substitution_offset));
       }
-      BinXmlParser nested(const_data_ptr_cast(value.binxml.data() + nested_offset),
-                          value.binxml.size() - nested_offset, sink);
+      BinXmlParser nested(
+          const_data_ptr_cast(value.binxml.data() + nested_offset),
+          value.binxml.size() - nested_offset, sink);
       nested.ParseDocument();
       return true;
     }
@@ -1864,8 +1865,9 @@ private:
   void ParseToken(uint8_t token) {
     auto token_offset = offset - 1;
     if (IsSsasRecordFamilyToken(token)) {
-      throw IOException("BINXML encountered SSAS record token 0x%02x at offset %llu",
-                        token, static_cast<unsigned long long>(token_offset));
+      throw IOException(
+          "BINXML encountered SSAS record token 0x%02x at offset %llu", token,
+          static_cast<unsigned long long>(token_offset));
     }
     auto base = BaseToken(token);
     if (base == FRAGMENT_HEADER_TOKEN) {
@@ -2098,7 +2100,8 @@ private:
     uint32_t prefix_id;
     uint32_t local_id;
     if (first > strings.size() + 1) {
-      // Some SSAS streams emit an explicit sparse NameId before URI/Prefix/Local.
+      // Some SSAS streams emit an explicit sparse NameId before
+      // URI/Prefix/Local.
       name_id = first;
       uri_id = ReadVarUInt();
       prefix_id = ReadVarUInt();
@@ -2177,7 +2180,8 @@ private:
       return std::to_string(ReadByte());
     case 0x19: {
       Ensure(2);
-      auto value = static_cast<uint16_t>(data[offset] | (data[offset + 1] << 8));
+      auto value =
+          static_cast<uint16_t>(data[offset] | (data[offset + 1] << 8));
       offset += 2;
       return std::to_string(value);
     }
@@ -2275,21 +2279,22 @@ private:
     case 0x1B:
     case 0x16:
     case 0x17:
-    case EMPTY_TEXT_TOKEN:
-      {
-        auto cell_name = pending_start ? pending_name : last_started_name;
-        FlushPendingStart();
-        auto text = ReadTextValue(token);
-        if (DebugSsasMeasuresEnabled() && !cell_name.empty() &&
-            measure_trace_count < MEASURE_TRACE_LIMIT) {
-          std::fprintf(stderr,
-                       "[pbi_scanner] SSAS row cell=%s token=0x%02x text_len=%llu text=\"%s\"\n",
-                       cell_name.c_str(), static_cast<unsigned int>(token),
-                       static_cast<unsigned long long>(text.size()), text.c_str());
-          measure_trace_count++;
-        }
-        sink.Text(text);
+    case EMPTY_TEXT_TOKEN: {
+      auto cell_name = pending_start ? pending_name : last_started_name;
+      FlushPendingStart();
+      auto text = ReadTextValue(token);
+      if (DebugSsasMeasuresEnabled() && !cell_name.empty() &&
+          measure_trace_count < MEASURE_TRACE_LIMIT) {
+        std::fprintf(stderr,
+                     "[pbi_scanner] SSAS row cell=%s token=0x%02x "
+                     "text_len=%llu text=\"%s\"\n",
+                     cell_name.c_str(), static_cast<unsigned int>(token),
+                     static_cast<unsigned long long>(text.size()),
+                     text.c_str());
+        measure_trace_count++;
       }
+      sink.Text(text);
+    }
       return;
     default:
       FailUnsupported(token, token_offset);
@@ -2405,8 +2410,8 @@ static idx_t SkipOptionalSsasFramingMarker(const std::string &payload,
   return offset;
 }
 
-static std::vector<idx_t> BuildNormalizedPayloadCandidates(
-    const std::string &payload) {
+static std::vector<idx_t>
+BuildNormalizedPayloadCandidates(const std::string &payload) {
   std::vector<idx_t> candidates;
   candidates.push_back(0);
 
@@ -2458,8 +2463,10 @@ static bool IsRecoverableEarlyFramingError(const Exception &ex,
   if (parser_offset >= 8) {
     return false;
   }
-  return message.find("unsupported token 0xdf at offset 0") != std::string::npos ||
-         message.find("unsupported token 0xfe at offset") != std::string::npos ||
+  return message.find("unsupported token 0xdf at offset 0") !=
+             std::string::npos ||
+         message.find("unsupported token 0xfe at offset") !=
+             std::string::npos ||
          message.find("encountered ssas record token") != std::string::npos ||
          message.find("ssas binary xml unsupported token") != std::string::npos;
 }
@@ -2643,7 +2650,8 @@ Value CoerceXmlValueForTesting(const std::string &raw_value,
   return CoerceXmlValue(raw_value, coercion_kind);
 }
 
-std::string EffectiveExecutionTransportForTesting(const std::string &statement) {
+std::string
+EffectiveExecutionTransportForTesting(const std::string &statement) {
   (void)statement;
   auto mode = ResolveXmlaTransportMode();
   switch (mode) {
