@@ -632,7 +632,7 @@ static Value CoerceXmlValue(const std::string &raw_value,
   }
   TrimString(body);
   if (body.empty()) {
-    return Value("");
+    return Value();
   }
 
   if (coercion_kind == XmlaCoercionKind::INFER) {
@@ -1404,6 +1404,22 @@ private:
 
   static uint8_t BaseToken(uint8_t token) { return token & TOKEN_MASK; }
   static bool HasMore(uint8_t token) { return (token & MORE_BIT) != 0; }
+  static idx_t SkipNestedDfPreamble(const std::string &payload) {
+    if (payload.empty() || static_cast<uint8_t>(payload[0]) != 0xDF) {
+      return 0;
+    }
+    idx_t nested_offset = 1;
+    for (uint32_t shift = 0; shift <= 28; shift += 7) {
+      if (nested_offset >= payload.size()) {
+        return 1;
+      }
+      auto byte = static_cast<uint8_t>(payload[nested_offset++]);
+      if ((byte & 0x80) == 0) {
+        return nested_offset;
+      }
+    }
+    return 1;
+  }
 
   [[noreturn]] void Fail(const char *message) const {
     throw IOException("BINXML %s at offset %llu", message,
@@ -1614,8 +1630,14 @@ private:
                           "here at offset %llu",
                           static_cast<unsigned long long>(substitution_offset));
       }
-      BinXmlParser nested(const_data_ptr_cast(value.binxml.data()),
-                          value.binxml.size(), sink);
+      auto nested_offset = SkipNestedDfPreamble(value.binxml);
+      if (nested_offset >= value.binxml.size()) {
+        throw IOException("BINXML nested substitution payload was empty at "
+                          "offset %llu",
+                          static_cast<unsigned long long>(substitution_offset));
+      }
+      BinXmlParser nested(const_data_ptr_cast(value.binxml.data() + nested_offset),
+                          value.binxml.size() - nested_offset, sink);
       nested.ParseDocument();
       return true;
     }
@@ -1862,6 +1884,8 @@ public:
   }
 
 private:
+  static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
+
   struct ExpandedName {
     std::string prefix;
     std::string local_name;
@@ -2076,6 +2100,8 @@ private:
       return "true";
     case 0x17:
       return "false";
+    case EMPTY_TEXT_TOKEN:
+      return std::string();
     default:
       FailUnsupported(token, offset - 1);
     }
@@ -2111,6 +2137,11 @@ private:
     case 0xF8:
       ParseStartElement();
       return;
+    case 0x01:
+      // Some streams emit the compact open-start-element token (0x01)
+      // in addition to SSAS record token 0xF8.
+      ParseStartElement();
+      return;
     case 0xF6:
       ParseAttribute();
       return;
@@ -2131,6 +2162,7 @@ private:
     case 0x15:
     case 0x16:
     case 0x17:
+    case EMPTY_TEXT_TOKEN:
       FlushPendingStart();
       sink.Text(ReadTextValue(token));
       return;
@@ -2199,17 +2231,83 @@ static bool IsSxXpressXmlaResponse(const HttpResponse &response) {
   return content_type.find("application/sx+xpress") != std::string::npos;
 }
 
+static idx_t SkipSxDfPreamble(const std::string &payload) {
+  if (payload.empty() || static_cast<uint8_t>(payload[0]) != 0xDF) {
+    return 0;
+  }
+  idx_t offset = 1;
+  for (uint32_t shift = 0; shift <= 28; shift += 7) {
+    if (offset >= payload.size()) {
+      return 0;
+    }
+    auto byte = static_cast<uint8_t>(payload[offset++]);
+    if ((byte & 0x80) == 0) {
+      return offset;
+    }
+  }
+  return 0;
+}
+
+static idx_t BinXmlPayloadOffset(const std::string &payload) {
+  auto preamble_offset = SkipSxDfPreamble(payload);
+  if (preamble_offset > 0) {
+    return preamble_offset;
+  }
+  if (!payload.empty() && static_cast<uint8_t>(payload[0]) == 0xDF &&
+      payload.size() > 1) {
+    // Some payloads include a bare 0xDF preamble marker before BINXML tokens.
+    return 1;
+  }
+  return 0;
+}
+
 static void ParseBinXmlResponse(const std::string &payload,
                                 XmlaStreamParser &parser) {
+  auto payload_offset = BinXmlPayloadOffset(payload);
+  auto has_prefixed_payload =
+      payload_offset > 0 && payload_offset < payload.size();
+  auto prefixed_first =
+      has_prefixed_payload ? static_cast<uint8_t>(payload[payload_offset]) : 0;
+  auto is_ssas_framed = has_prefixed_payload && prefixed_first == 0xB0;
+  std::string ssas_failure;
+
   if (!payload.empty() && static_cast<uint8_t>(payload[0]) == 0xDF) {
-    SsasBinaryXmlParser ssas_binxml(const_data_ptr_cast(payload.data()),
-                                    payload.size(), parser);
-    ssas_binxml.ParseDocument();
+    try {
+      SsasBinaryXmlParser ssas_binxml(const_data_ptr_cast(payload.data()),
+                                      payload.size(), parser);
+      ssas_binxml.ParseDocument();
+      return;
+    } catch (const Exception &ex) {
+      ssas_failure = ex.what();
+      // Some engines advertise SSAS binary framing but emit BINXML tokens.
+      // Fall through to BINXML parsing as a compatibility path.
+      if (has_prefixed_payload && !is_ssas_framed) {
+        BinXmlParser prefixed_binxml(
+            const_data_ptr_cast(payload.data() + payload_offset),
+            payload.size() - payload_offset, parser);
+        prefixed_binxml.ParseDocument();
+        return;
+      }
+    }
+  }
+  if (has_prefixed_payload && !is_ssas_framed) {
+    BinXmlParser prefixed_binxml(
+        const_data_ptr_cast(payload.data() + payload_offset),
+        payload.size() - payload_offset, parser);
+    prefixed_binxml.ParseDocument();
     return;
   }
-  BinXmlParser binxml(const_data_ptr_cast(payload.data()), payload.size(),
-                      parser);
-  binxml.ParseDocument();
+  try {
+    BinXmlParser binxml(const_data_ptr_cast(payload.data()), payload.size(),
+                        parser);
+    binxml.ParseDocument();
+  } catch (const Exception &ex) {
+    if (!ssas_failure.empty()) {
+      throw IOException("SSAS binary parse failed: %s; BINXML parse failed: %s",
+                        ssas_failure.c_str(), ex.what());
+    }
+    throw;
+  }
 }
 
 static bool DecodeBufferedXmlaResponse(const HttpResponse &response,
@@ -2333,6 +2431,22 @@ static std::string BuildXmlaExecuteEnvelopeForTransport(
   return envelope;
 }
 
+static XmlaTransportMode
+EffectiveExecutionTransport(const XmlaRequest &request,
+                            XmlaTransportMode configured_mode) {
+  if (configured_mode != XmlaTransportMode::SX_XPRESS) {
+    return configured_mode;
+  }
+  // INFO.VIEW metadata queries can still emit SSAS BINXML variants that are
+  // not fully decoded by the sx parser path yet. Keep strict sx_xpress for
+  // general DAX while using xpress compatibility for these metadata rowsets.
+  auto statement = StringUtil::Upper(request.statement);
+  if (statement.find("INFO.VIEW.") != std::string::npos) {
+    return XmlaTransportMode::XPRESS;
+  }
+  return configured_mode;
+}
+
 } // namespace
 
 Value CoerceXmlValueForTesting(const std::string &raw_value,
@@ -2450,9 +2564,12 @@ void XmlaExecutor::ExecuteStreaming(
         &on_schema,
     const std::function<bool(const std::vector<Value> &row)> &on_row,
     const std::function<bool()> &should_stop) {
-  auto envelope = BuildXmlaExecuteEnvelope(request.catalog, request.statement,
-                                           request.effective_user_name);
-  auto transport_mode = ResolveXmlaTransportMode();
+  auto configured_transport_mode = ResolveXmlaTransportMode();
+  auto transport_mode =
+      EffectiveExecutionTransport(request, configured_transport_mode);
+  auto envelope = BuildXmlaExecuteEnvelopeForTransport(
+      request.catalog, request.statement, request.effective_user_name,
+      transport_mode);
   auto buffer_response = transport_mode != XmlaTransportMode::PLAIN;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row);

@@ -175,8 +175,13 @@ duckdb.exe -unsigned -c "LOAD './build/release/extension/pbi_scanner/pbi_scanner
 - `PBI_BENCH_ITERATIONS=<n>`
 - `PBI_BENCH_DIRECT_XMLA=1` to resolve locator once in Python and run direct XMLA
 - `PBI_SCANNER_XMLA_TRANSPORT=plain|xpress|sx|sx_xpress` (default: `sx_xpress`)
+- `PBI_BENCH_METADATA_PROBE=1` to validate metadata TVFs in the same session
+- `PBI_BENCH_METADATA_MATRIX=1` to classify primary vs compatibility transport behavior
+- `PBI_BENCH_METADATA_STRICT_SX=1` to fail if `sx_xpress` metadata only passes via compatibility fallback
 - `PBI_SCANNER_DISABLE_METADATA_CACHE=1` for cold-target/schema measurements
 - `PBI_SCANNER_DEBUG_TIMINGS=1` for per-phase timings
+
+`sx_xpress` remains the default fast path. `xpress` and `plain` remain available as explicit compatibility/diagnostic transports until strict metadata and DAX validation is consistently green across broader live model coverage.
 
 ### Metadata Cache
 
@@ -188,6 +193,7 @@ Resolved targets and schema metadata are cached on disk by default:
 - `PBI_SCANNER_TARGET_CACHE_TTL_SECONDS` and `PBI_SCANNER_SCHEMA_CACHE_TTL_SECONDS` tune TTLs
 
 For detailed transport benchmarks and parser notes, see [docs/xmla_transport_performance.md](docs/xmla_transport_performance.md).
+The XMLA binary parser implementation is independent, informed by Microsoft Open Specifications and observed wire behavior/interoperability testing, and does not derive from ADOMD.NET source.
 
 ## Development
 

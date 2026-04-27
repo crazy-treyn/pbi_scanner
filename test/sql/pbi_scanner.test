@@ -41,6 +41,13 @@ SELECT __pbi_scanner_test_parse_binxml_double(
 112.5
 
 query I
+SELECT length(__pbi_scanner_test_parse_binxml_first_text(
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f80386f7f7f7'
+));
+----
+4
+
+query I
 SELECT CAST(__pbi_scanner_test_metadata_cache_roundtrip() AS INTEGER);
 ----
 1

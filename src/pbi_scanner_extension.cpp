@@ -70,6 +70,24 @@ static void ParseBinXmlDoubleTestFunction(DataChunk &args,
       });
 }
 
+static void ParseBinXmlFirstTextTestFunction(DataChunk &args,
+                                             ExpressionState &state,
+                                             Vector &result) {
+  UnaryExecutor::Execute<string_t, string_t>(
+      args.data[0], result, args.size(), [&](string_t input) {
+        auto parsed = ParseBinXmlForTesting(DecodeHex(input.GetString()));
+        if (!parsed.fault_message.empty()) {
+          throw InvalidInputException(parsed.fault_message);
+        }
+        if (parsed.rows.size() != 1 || parsed.rows[0].size() != 1) {
+          throw InvalidInputException(
+              "expected exactly one parsed BINXML row with one column");
+        }
+        return StringVector::AddString(result,
+                                       parsed.rows[0][0].ToString());
+      });
+}
+
 static void MetadataCacheRoundTripTestFunction(DataChunk &args,
                                                ExpressionState &state,
                                                Vector &result) {
@@ -148,6 +166,9 @@ static void LoadInternal(ExtensionLoader &loader) {
   loader.RegisterFunction(ScalarFunction(
       "__pbi_scanner_test_parse_binxml_double", {LogicalType::VARCHAR},
       LogicalType::DOUBLE, ParseBinXmlDoubleTestFunction));
+  loader.RegisterFunction(ScalarFunction(
+      "__pbi_scanner_test_parse_binxml_first_text", {LogicalType::VARCHAR},
+      LogicalType::VARCHAR, ParseBinXmlFirstTextTestFunction));
   loader.RegisterFunction(
       ScalarFunction("__pbi_scanner_test_metadata_cache_roundtrip", {},
                      LogicalType::BOOLEAN, MetadataCacheRoundTripTestFunction));

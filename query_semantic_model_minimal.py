@@ -11,6 +11,10 @@ Configuration (prefer env vars so nothing secret is hardcoded):
   PBI_BENCH_METADATA_PROBE — set 1/true to run pbi_* metadata probes
   PBI_BENCH_METADATA_FAIL_FAST — optional; stop on first metadata failure
   PBI_BENCH_METADATA_MIN_ROWS — optional; minimum rows for tables/columns (default 1)
+  PBI_BENCH_METADATA_PRINT_ROWS — optional; print sampled metadata rows (default on; set 0/false/no/off to disable)
+  PBI_BENCH_METADATA_MATRIX — optional; run metadata probes across transport profiles
+  PBI_BENCH_METADATA_INCLUDE_PLAIN — optional; include plain transport in matrix mode
+  PBI_BENCH_METADATA_STRICT_SX — optional; enforce sx_xpress primary pass (soft-fail becomes hard-fail)
   PBI_BENCH_DIRECT_XMLA — resolve powerbi:// to direct XMLA before running
   PBI_SCANNER_XMLA_TRANSPORT — plain, sx, xpress, or sx_xpress; default sx_xpress
   PBI_SCANNER_DISABLE_METADATA_CACHE — set 1/true to force cold target/schema probes
@@ -21,6 +25,12 @@ falls back to the bundled `./build/release/duckdb` CLI (after `make release`).
 
 Run with uv (installs the `bench` group / Python duckdb when needed):
   uv run --group bench query_semantic_model_minimal.py
+
+Metadata probe examples:
+  PBI_BENCH_METADATA_PROBE=1 uv run --group bench query_semantic_model_minimal.py
+  PBI_BENCH_METADATA_PROBE=1 PBI_BENCH_METADATA_MATRIX=1 uv run --group bench query_semantic_model_minimal.py
+  PBI_BENCH_METADATA_PROBE=1 PBI_BENCH_METADATA_STRICT_SX=1 uv run --group bench query_semantic_model_minimal.py
+  PBI_SCANNER_XMLA_TRANSPORT=xpress PBI_BENCH_METADATA_PROBE=1 uv run --group bench query_semantic_model_minimal.py
 """
 from __future__ import annotations
 
@@ -75,6 +85,12 @@ _DEFAULT_DAX = 'EVALUATE ROW("x", 1)'
 _SAMPLE_ROWS = 100
 _POWER_BI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 _METADATA_SAMPLE_ROWS = 5
+_METADATA_FUNCTION_NAMES = (
+    "pbi_tables",
+    "pbi_columns",
+    "pbi_measures",
+    "pbi_relationships",
+)
 
 extension_path = (
     REPO
@@ -266,6 +282,15 @@ def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_flag_default_on(name: str, default: str = "1") -> bool:
+    value = os.environ.get(name, default).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _default_xmla_transport() -> str:
+    return os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "sx_xpress").strip() or "sx_xpress"
+
+
 def _sql_escape(value: str) -> str:
     return value.replace("'", "''")
 
@@ -285,13 +310,16 @@ def _normalized_column_name(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
-def _find_matching_columns(columns: list[str], token_options: set[str]) -> list[str]:
+def _find_matching_columns(
+    columns: list[str],
+    token_options: set[str],
+    column_norm: dict[str, str] | None = None,
+) -> list[str]:
     matches: list[str] = []
     normalized_tokens = {_normalized_column_name(token) for token in token_options}
-    normalized_columns = {
-        column: _normalized_column_name(column) for column in columns
-    }
-    for column, normalized in normalized_columns.items():
+    if column_norm is None:
+        column_norm = {column: _normalized_column_name(column) for column in columns}
+    for column, normalized in column_norm.items():
         if any(token in normalized for token in normalized_tokens):
             matches.append(column)
     return matches
@@ -311,18 +339,17 @@ def _has_non_empty_value(rows: list[tuple[object, ...]], columns: list[str], tar
     return False
 
 
-def _run_metadata_probes(con: object, connection_string: str, secret_name: str) -> None:
-    fail_fast = _truthy_env("PBI_BENCH_METADATA_FAIL_FAST")
-    min_rows = int(os.environ.get("PBI_BENCH_METADATA_MIN_ROWS", "1"))
-    checks = [
+def _metadata_checks(min_rows: int) -> list[dict[str, object]]:
+    return [
         {
             "name": "pbi_tables",
+            # INFO.VIEW.TABLES uses [Name], [Model], [ID] (not [Table]).
             "required_groups": [
-                {"table"},
-                {"name", "tablename", "tableid"},
+                {"name"},
+                {"model"},
             ],
             "non_empty_groups": [
-                {"table", "name", "tablename"},
+                {"name", "tablename"},
             ],
             "min_rows": min_rows,
         },
@@ -366,16 +393,45 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
         },
     ]
 
-    print(
-        "[python] metadata probe enabled "
-        f"(fail_fast={'on' if fail_fast else 'off'} "
-        f"min_rows_tables_columns={min_rows})"
-    )
 
-    failures: list[str] = []
+def _metadata_transport_profiles(matrix_mode: bool, include_plain: bool) -> list[dict[str, str]]:
+    configured_transport = _default_xmla_transport()
+    profiles: list[dict[str, str]] = [
+        {"name": "default", "transport": configured_transport, "kind": "primary"}
+    ]
+    if not matrix_mode:
+        return profiles
+    if configured_transport != "xpress":
+        profiles.append({"name": "xpress", "transport": "xpress", "kind": "compatibility"})
+    if include_plain and configured_transport != "plain":
+        profiles.append({"name": "plain", "transport": "plain", "kind": "diagnostic"})
+    return profiles
+
+
+def _run_metadata_probe_profile(
+    con: object,
+    connection_string: str,
+    secret_name: str,
+    profile_name: str,
+    transport: str,
+    checks: list[dict[str, object]],
+    fail_fast: bool,
+    print_rows_enabled: bool,
+) -> dict[str, dict[str, object]]:
+    results: dict[str, dict[str, object]] = {}
+    os.environ["PBI_SCANNER_XMLA_TRANSPORT"] = transport
+    print(f"[metadata][PROFILE] {profile_name}: transport={transport}")
     for check in checks:
         name = str(check["name"])
         source_sql = _metadata_function_sql(name, connection_string, secret_name)
+        results[name] = {
+            "ok": False,
+            "profile": profile_name,
+            "transport": transport,
+            "stage": "init",
+            "message": "",
+            "row_count": None,
+        }
 
         count_started_at = perf_counter()
         try:
@@ -384,22 +440,23 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
             )
         except Exception as exc:
             message = f"{name}: count query failed: {exc}"
-            failures.append(message)
-            print(f"[metadata][FAIL] {message}")
+            results[name]["stage"] = "count"
+            results[name]["message"] = message
+            print(f"[metadata][FAIL][{profile_name}][{name}][count] {exc}")
             if fail_fast:
                 raise RuntimeError(message) from exc
             continue
-        log_timing(f"metadata {name} count(*)", count_started_at)
-        print(f"[metadata][PASS] {name}: row_count={total_rows}")
+        log_timing(f"metadata {profile_name} {name} count(*)", count_started_at)
+        results[name]["row_count"] = total_rows
+        print(f"[metadata][PASS][{profile_name}][{name}][count] row_count={total_rows}")
 
         if total_rows < int(check["min_rows"]):
-            message = (
-                f"{name}: expected at least {check['min_rows']} rows, got {total_rows}"
-            )
-            failures.append(message)
-            print(f"[metadata][FAIL] {message}")
+            message = f"expected at least {check['min_rows']} rows, got {total_rows}"
+            results[name]["stage"] = "count_threshold"
+            results[name]["message"] = message
+            print(f"[metadata][FAIL][{profile_name}][{name}][count_threshold] {message}")
             if fail_fast:
-                raise RuntimeError(message)
+                raise RuntimeError(f"{name}: {message}")
             continue
 
         shape_started_at = perf_counter()
@@ -409,35 +466,37 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
             rows = relation.fetchall()
         except Exception as exc:
             message = f"{name}: sample/content query failed: {exc}"
-            failures.append(message)
-            print(f"[metadata][FAIL] {message}")
+            results[name]["stage"] = "content_fetch"
+            results[name]["message"] = message
+            print(f"[metadata][FAIL][{profile_name}][{name}][content_fetch] {exc}")
             if fail_fast:
                 raise RuntimeError(message) from exc
             continue
-        log_timing(f"metadata {name} content sample", shape_started_at)
+        log_timing(f"metadata {profile_name} {name} content sample", shape_started_at)
 
+        column_norm = {column: _normalized_column_name(column) for column in columns}
         missing_groups: list[set[str]] = []
         for group in check["required_groups"]:
-            if not _find_matching_columns(columns, set(group)):
+            if not _find_matching_columns(columns, set(group), column_norm):
                 missing_groups.append(set(group))
         if missing_groups:
-            message = (
-                f"{name}: missing expected column groups={missing_groups}; "
-                f"returned_columns={columns}"
-            )
-            failures.append(message)
-            print(f"[metadata][FAIL] {message}")
+            message = f"missing expected column groups={missing_groups}; returned_columns={columns}"
+            results[name]["stage"] = "schema"
+            results[name]["message"] = message
+            print(f"[metadata][FAIL][{profile_name}][{name}][schema] {message}")
             if fail_fast:
-                raise RuntimeError(message)
+                raise RuntimeError(f"{name}: {message}")
             continue
 
         if total_rows == 0:
-            print(f"[metadata][PASS] {name}: content checks skipped (0 rows)")
+            results[name]["ok"] = True
+            results[name]["stage"] = "content"
+            print(f"[metadata][PASS][{profile_name}][{name}][content] skipped (0 rows)")
             continue
 
         non_empty_failures: list[set[str]] = []
         for group in check["non_empty_groups"]:
-            candidate_columns = _find_matching_columns(columns, set(group))
+            candidate_columns = _find_matching_columns(columns, set(group), column_norm)
             if not candidate_columns:
                 continue
             if not any(
@@ -447,20 +506,157 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
                 non_empty_failures.append(set(group))
         if non_empty_failures:
             message = (
-                f"{name}: expected non-empty sample values for groups={non_empty_failures}; "
+                f"expected non-empty sample values for groups={non_empty_failures}; "
                 f"sample_rows={len(rows)}"
             )
-            failures.append(message)
-            print(f"[metadata][FAIL] {message}")
+            results[name]["stage"] = "content"
+            results[name]["message"] = message
+            print(f"[metadata][FAIL][{profile_name}][{name}][content] {message}")
             if fail_fast:
-                raise RuntimeError(message)
+                raise RuntimeError(f"{name}: {message}")
             continue
 
-        print(f"[metadata][PASS] {name}: content checks passed")
+        results[name]["ok"] = True
+        results[name]["stage"] = "content"
+        print(f"[metadata][PASS][{profile_name}][{name}][content] checks passed")
+        if print_rows_enabled:
+            print(f"[metadata][ROWS][{profile_name}][{name}] showing up to {_METADATA_SAMPLE_ROWS} rows")
+            print(f"[metadata][COLUMNS][{profile_name}][{name}] {columns}")
+            for idx, row in enumerate(rows, start=1):
+                row_map = {column: value for column, value in zip(columns, row)}
+                print(f"[metadata][ROW {idx}][{profile_name}][{name}] {row_map}")
+    return results
 
-    if failures:
-        joined = "\n - ".join(failures)
-        raise RuntimeError(f"metadata probe failed:\n - {joined}")
+
+def _classify_metadata_outcomes(
+    profile_results: dict[str, dict[str, dict[str, object]]],
+    profiles: list[dict[str, str]],
+) -> tuple[list[str], list[str], list[str]]:
+    function_names = list(_METADATA_FUNCTION_NAMES)
+    default_profile_name = profiles[0]["name"]
+    compatibility_profile_name = next(
+        (profile["name"] for profile in profiles if profile["kind"] == "compatibility"),
+        "",
+    )
+    pass_lines: list[str] = []
+    soft_fail_lines: list[str] = []
+    hard_fail_lines: list[str] = []
+
+    for function_name in function_names:
+        per_profile = profile_results.get(function_name, {})
+        default_result = per_profile.get(default_profile_name)
+        if default_result and bool(default_result["ok"]):
+            pass_lines.append(f"{function_name}: PASS in primary profile ({default_profile_name})")
+            continue
+
+        compatible_result = (
+            per_profile.get(compatibility_profile_name) if compatibility_profile_name else None
+        )
+        if compatible_result and bool(compatible_result["ok"]):
+            default_stage = str(default_result["stage"]) if default_result else "unknown"
+            default_message = str(default_result["message"]) if default_result else "unknown failure"
+            soft_fail_lines.append(
+                f"{function_name}: SOFT_FAIL in primary ({default_profile_name}, stage={default_stage}) "
+                f"but PASS in compatibility ({compatibility_profile_name}); cause={default_message}"
+            )
+            continue
+
+        details: list[str] = []
+        for profile in profiles:
+            profile_name = profile["name"]
+            result = per_profile.get(profile_name)
+            if not result:
+                details.append(f"{profile_name}: no result")
+                continue
+            details.append(
+                f"{profile_name}: stage={result['stage']} message={result['message'] or 'n/a'}"
+            )
+        hard_fail_lines.append(f"{function_name}: HARD_FAIL ({'; '.join(details)})")
+
+    return pass_lines, soft_fail_lines, hard_fail_lines
+
+
+def _run_metadata_probes(con: object, connection_string: str, secret_name: str) -> None:
+    fail_fast = _truthy_env("PBI_BENCH_METADATA_FAIL_FAST")
+    min_rows = int(os.environ.get("PBI_BENCH_METADATA_MIN_ROWS", "1"))
+    print_rows_enabled = _env_flag_default_on("PBI_BENCH_METADATA_PRINT_ROWS")
+    matrix_mode = _truthy_env("PBI_BENCH_METADATA_MATRIX")
+    include_plain = _truthy_env("PBI_BENCH_METADATA_INCLUDE_PLAIN")
+    strict_sx_mode = _truthy_env("PBI_BENCH_METADATA_STRICT_SX")
+    configured_transport = _default_xmla_transport()
+    if strict_sx_mode and configured_transport != "sx_xpress":
+        raise RuntimeError(
+            "PBI_BENCH_METADATA_STRICT_SX=1 requires "
+            "PBI_SCANNER_XMLA_TRANSPORT=sx_xpress"
+        )
+    if strict_sx_mode:
+        matrix_mode = True
+    checks = _metadata_checks(min_rows)
+    profiles = _metadata_transport_profiles(matrix_mode, include_plain)
+    original_transport = os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "")
+
+    print(
+        "[python] metadata probe enabled "
+        f"(fail_fast={'on' if fail_fast else 'off'} "
+        f"min_rows_tables_columns={min_rows} "
+        f"strict_sx={'on' if strict_sx_mode else 'off'} "
+        f"matrix_mode={'on' if matrix_mode else 'off'} "
+        f"profiles={','.join(profile['name'] + ':' + profile['transport'] for profile in profiles)})"
+    )
+    per_function_results: dict[str, dict[str, dict[str, object]]] = {}
+    try:
+        for profile in profiles:
+            profile_started_at = perf_counter()
+            profile_name = profile["name"]
+            profile_transport = profile["transport"]
+            profile_results = _run_metadata_probe_profile(
+                con,
+                connection_string,
+                secret_name,
+                profile_name,
+                profile_transport,
+                checks,
+                fail_fast,
+                print_rows_enabled,
+            )
+            for function_name, result in profile_results.items():
+                per_function_results.setdefault(function_name, {})[profile_name] = result
+            log_timing(f"metadata profile {profile_name} total", profile_started_at)
+    finally:
+        if original_transport:
+            os.environ["PBI_SCANNER_XMLA_TRANSPORT"] = original_transport
+        elif "PBI_SCANNER_XMLA_TRANSPORT" in os.environ:
+            del os.environ["PBI_SCANNER_XMLA_TRANSPORT"]
+
+    pass_lines, soft_fail_lines, hard_fail_lines = _classify_metadata_outcomes(
+        per_function_results, profiles
+    )
+    print("[metadata][SUMMARY] ----------------------------------------")
+    for line in pass_lines:
+        print(f"[metadata][SUMMARY][PASS] {line}")
+    for line in soft_fail_lines:
+        print(f"[metadata][SUMMARY][SOFT_FAIL] {line}")
+    for line in hard_fail_lines:
+        print(f"[metadata][SUMMARY][HARD_FAIL] {line}")
+    print(
+        "[metadata][SUMMARY] counts: "
+        f"pass={len(pass_lines)} soft_fail={len(soft_fail_lines)} hard_fail={len(hard_fail_lines)}"
+    )
+    effective_hard_fail_lines = list(hard_fail_lines)
+    if strict_sx_mode and soft_fail_lines:
+        effective_hard_fail_lines.extend(
+            [f"{line} [promoted by strict_sx mode]" for line in soft_fail_lines]
+        )
+    if effective_hard_fail_lines:
+        print(
+            "[metadata][SUMMARY] rerun hint: "
+            "PBI_SCANNER_XMLA_TRANSPORT=xpress PBI_BENCH_METADATA_PROBE=1 "
+            "uv run --group bench query_semantic_model_minimal.py"
+        )
+        raise RuntimeError(
+            "metadata probe hard failures detected "
+            f"(configured transport={configured_transport}); see summary above"
+        )
 
 
 def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: str) -> None:
@@ -473,10 +669,7 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
         or "materialize"
     )
     iterations = int(os.environ.get("PBI_BENCH_ITERATIONS", "1"))
-    transport = (
-        os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "sx_xpress").strip()
-        or "sx_xpress"
-    )
+    transport = _default_xmla_transport()
     metadata_cache_disabled = (
         os.environ.get("PBI_SCANNER_DISABLE_METADATA_CACHE", "").strip().lower()
         in {"1", "true", "yes", "on"}
