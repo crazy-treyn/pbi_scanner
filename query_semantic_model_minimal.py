@@ -8,6 +8,9 @@ Configuration (prefer env vars so nothing secret is hardcoded):
   PBI_BENCH_SECRET_NAME — optional; default pbi_cli
   PBI_BENCH_MODE — count or materialize; default materialize
   PBI_BENCH_ITERATIONS — runs in the same process; default 1
+  PBI_BENCH_METADATA_PROBE — set 1/true to run pbi_* metadata probes
+  PBI_BENCH_METADATA_FAIL_FAST — optional; stop on first metadata failure
+  PBI_BENCH_METADATA_MIN_ROWS — optional; minimum rows for tables/columns (default 1)
   PBI_BENCH_DIRECT_XMLA — resolve powerbi:// to direct XMLA before running
   PBI_SCANNER_XMLA_TRANSPORT — plain, sx, xpress, or sx_xpress; default sx_xpress
   PBI_SCANNER_DISABLE_METADATA_CACHE — set 1/true to force cold target/schema probes
@@ -71,6 +74,7 @@ _DEFAULT_CONNECTION_STRING = (
 _DEFAULT_DAX = 'EVALUATE ROW("x", 1)'
 _SAMPLE_ROWS = 100
 _POWER_BI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
+_METADATA_SAMPLE_ROWS = 5
 
 extension_path = (
     REPO
@@ -258,6 +262,207 @@ def _dax_sql(
     raise ValueError("PBI_BENCH_MODE must be count or materialize")
 
 
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sql_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _metadata_function_sql(
+    function_name: str, connection_string: str, secret_name: str
+) -> str:
+    return (
+        f"{function_name}("
+        f"'{_sql_escape(connection_string)}', "
+        f"secret_name := '{_sql_escape(secret_name)}'"
+        f")"
+    )
+
+
+def _normalized_column_name(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _find_matching_columns(columns: list[str], token_options: set[str]) -> list[str]:
+    matches: list[str] = []
+    normalized_tokens = {_normalized_column_name(token) for token in token_options}
+    normalized_columns = {
+        column: _normalized_column_name(column) for column in columns
+    }
+    for column, normalized in normalized_columns.items():
+        if any(token in normalized for token in normalized_tokens):
+            matches.append(column)
+    return matches
+
+
+def _has_non_empty_value(rows: list[tuple[object, ...]], columns: list[str], target_column: str) -> bool:
+    column_idx = columns.index(target_column)
+    for row in rows:
+        value = row[column_idx]
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return True
+            continue
+        return True
+    return False
+
+
+def _run_metadata_probes(con: object, connection_string: str, secret_name: str) -> None:
+    fail_fast = _truthy_env("PBI_BENCH_METADATA_FAIL_FAST")
+    min_rows = int(os.environ.get("PBI_BENCH_METADATA_MIN_ROWS", "1"))
+    checks = [
+        {
+            "name": "pbi_tables",
+            "required_groups": [
+                {"table"},
+                {"name", "tablename", "tableid"},
+            ],
+            "non_empty_groups": [
+                {"table", "name", "tablename"},
+            ],
+            "min_rows": min_rows,
+        },
+        {
+            "name": "pbi_columns",
+            "required_groups": [
+                {"column"},
+                {"table"},
+                {"type", "datatype"},
+            ],
+            "non_empty_groups": [
+                {"column", "columnname"},
+                {"table", "tablename"},
+            ],
+            "min_rows": min_rows,
+        },
+        {
+            "name": "pbi_measures",
+            "required_groups": [
+                {"measure"},
+            ],
+            "non_empty_groups": [
+                {"measure", "measurename"},
+                {"expression", "formula"},
+            ],
+            # Some models have no measures; default to informative pass at 0 rows.
+            "min_rows": 0,
+        },
+        {
+            "name": "pbi_relationships",
+            "required_groups": [
+                {"fromtable", "sourcetable", "from"},
+                {"totable", "targettable", "to"},
+            ],
+            "non_empty_groups": [
+                {"fromtable", "sourcetable", "from"},
+                {"totable", "targettable", "to"},
+            ],
+            # Some models have no explicit relationships; default to informative pass at 0 rows.
+            "min_rows": 0,
+        },
+    ]
+
+    print(
+        "[python] metadata probe enabled "
+        f"(fail_fast={'on' if fail_fast else 'off'} "
+        f"min_rows_tables_columns={min_rows})"
+    )
+
+    failures: list[str] = []
+    for check in checks:
+        name = str(check["name"])
+        source_sql = _metadata_function_sql(name, connection_string, secret_name)
+
+        count_started_at = perf_counter()
+        try:
+            total_rows = int(
+                con.sql(f"SELECT count(*) AS total_rows FROM {source_sql}").fetchone()[0]
+            )
+        except Exception as exc:
+            message = f"{name}: count query failed: {exc}"
+            failures.append(message)
+            print(f"[metadata][FAIL] {message}")
+            if fail_fast:
+                raise RuntimeError(message) from exc
+            continue
+        log_timing(f"metadata {name} count(*)", count_started_at)
+        print(f"[metadata][PASS] {name}: row_count={total_rows}")
+
+        if total_rows < int(check["min_rows"]):
+            message = (
+                f"{name}: expected at least {check['min_rows']} rows, got {total_rows}"
+            )
+            failures.append(message)
+            print(f"[metadata][FAIL] {message}")
+            if fail_fast:
+                raise RuntimeError(message)
+            continue
+
+        shape_started_at = perf_counter()
+        try:
+            relation = con.sql(f"SELECT * FROM {source_sql} LIMIT {_METADATA_SAMPLE_ROWS}")
+            columns = list(relation.columns)
+            rows = relation.fetchall()
+        except Exception as exc:
+            message = f"{name}: sample/content query failed: {exc}"
+            failures.append(message)
+            print(f"[metadata][FAIL] {message}")
+            if fail_fast:
+                raise RuntimeError(message) from exc
+            continue
+        log_timing(f"metadata {name} content sample", shape_started_at)
+
+        missing_groups: list[set[str]] = []
+        for group in check["required_groups"]:
+            if not _find_matching_columns(columns, set(group)):
+                missing_groups.append(set(group))
+        if missing_groups:
+            message = (
+                f"{name}: missing expected column groups={missing_groups}; "
+                f"returned_columns={columns}"
+            )
+            failures.append(message)
+            print(f"[metadata][FAIL] {message}")
+            if fail_fast:
+                raise RuntimeError(message)
+            continue
+
+        if total_rows == 0:
+            print(f"[metadata][PASS] {name}: content checks skipped (0 rows)")
+            continue
+
+        non_empty_failures: list[set[str]] = []
+        for group in check["non_empty_groups"]:
+            candidate_columns = _find_matching_columns(columns, set(group))
+            if not candidate_columns:
+                continue
+            if not any(
+                _has_non_empty_value(rows, columns, candidate)
+                for candidate in candidate_columns
+            ):
+                non_empty_failures.append(set(group))
+        if non_empty_failures:
+            message = (
+                f"{name}: expected non-empty sample values for groups={non_empty_failures}; "
+                f"sample_rows={len(rows)}"
+            )
+            failures.append(message)
+            print(f"[metadata][FAIL] {message}")
+            if fail_fast:
+                raise RuntimeError(message)
+            continue
+
+        print(f"[metadata][PASS] {name}: content checks passed")
+
+    if failures:
+        joined = "\n - ".join(failures)
+        raise RuntimeError(f"metadata probe failed:\n - {joined}")
+
+
 def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: str) -> None:
     import duckdb  # noqa: PLC0415
 
@@ -277,11 +482,13 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
         in {"1", "true", "yes", "on"}
     )
     metadata_cache_dir = os.environ.get("PBI_SCANNER_CACHE_DIR", "").strip() or "default"
+    metadata_probe = _truthy_env("PBI_BENCH_METADATA_PROBE")
     print(
         f"[python] benchmark mode={mode} iterations={iterations} "
         f"transport={transport} "
         f"metadata_cache={'disabled' if metadata_cache_disabled else 'enabled'} "
-        f"cache_dir={metadata_cache_dir}"
+        f"cache_dir={metadata_cache_dir} "
+        f"metadata_probe={'enabled' if metadata_probe else 'disabled'}"
     )
     if os.environ.get("PBI_BENCH_DIRECT_XMLA", "").strip():
         connection_string = resolve_direct_xmla_connection_string(connection_string)
@@ -313,6 +520,11 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
         """
     )
     log_timing(f"CREATE SECRET {secret_name}", step_started_at)
+
+    if metadata_probe:
+        step_started_at = perf_counter()
+        _run_metadata_probes(con, connection_string, secret_name)
+        log_timing("metadata probe total", step_started_at)
 
     for iteration in range(1, iterations + 1):
         prefix = f"iteration {iteration}/{iterations} {mode}"
@@ -351,6 +563,12 @@ def run_with_bundled_cli(connection_string: str, dax_query: str, secret_name: st
         ext_path, secret_name, connection_string, dax_query, _SAMPLE_ROWS
     )
     bench_env = {k: os.environ[k] for k in os.environ if k.startswith("PBI_SCANNER")}
+    if _truthy_env("PBI_BENCH_METADATA_PROBE"):
+        print(
+            "[python] metadata probe requested, but bundled CLI fallback currently "
+            "runs the dax_query materialize/count workflow only",
+            file=sys.stderr,
+        )
 
     step_started_at = perf_counter()
     proc = run_duckdb_cli(REPO, sql, env=bench_env)
