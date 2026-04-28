@@ -70,6 +70,7 @@ public:
   std::vector<XmlaColumn> ProbeSchema(const XmlaRequest &request);
   void ExecuteStreaming(
       const XmlaRequest &request,
+      const std::vector<XmlaColumn> *known_columns,
       const std::function<void(const std::vector<XmlaColumn> &columns)>
           &on_schema,
       const std::function<bool(const std::vector<Value> &row)> &on_row,

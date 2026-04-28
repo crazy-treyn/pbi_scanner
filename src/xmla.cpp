@@ -2315,6 +2315,701 @@ private:
   case_insensitive_map_t<std::string> pending_attributes;
 };
 
+class SsasFastRowParser {
+public:
+  SsasFastRowParser(
+      const_data_ptr_t data_p, idx_t size_p,
+      const std::vector<XmlaColumn> &columns_p,
+      const std::function<bool(const std::vector<Value> &row)> &on_row_p,
+      const std::function<bool()> &should_stop_p)
+      : data(data_p), size(size_p), columns(columns_p), on_row(on_row_p),
+        should_stop(should_stop_p) {
+    auto *debug_value = std::getenv("PBI_SCANNER_DEBUG_SSAS_MEASURES");
+    debug_trace_enabled = debug_value && *debug_value;
+    for (idx_t i = 0; i < columns.size(); i++) {
+      column_indexes[columns[i].name] = i;
+      column_indexes_lower[StringUtil::Lower(columns[i].name)] = i;
+    }
+  }
+
+  void ParseDocument() {
+    if (PeekByte() == 0xDF) {
+      ReadByte();
+      ReadVarUInt();
+    }
+    if (PeekByte() == 0xB0) {
+      ReadByte();
+      ReadByte();
+    }
+    while (offset < size && !stopped_early) {
+      if (should_stop && should_stop()) {
+        stopped_early = true;
+        return;
+      }
+      ParseRecord();
+    }
+    FlushPendingStart();
+  }
+
+  idx_t ProducedRows() const { return produced_rows; }
+
+private:
+  enum class ElementKind : uint8_t { OTHER, SCHEMA, ROW };
+  static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
+  static constexpr idx_t CELL_TRACE_LIMIT = 80;
+
+  struct ExpandedName {
+    std::string prefix;
+    std::string local_name;
+    std::string uri;
+    idx_t column_index = DConstants::INVALID_INDEX;
+  };
+
+  struct StackEntry {
+    uint32_t name_id;
+    ElementKind kind;
+  };
+
+  [[noreturn]] void Fail(const char *message) const {
+    throw IOException("SSAS fast row parser %s at offset %llu", message,
+                      static_cast<unsigned long long>(offset));
+  }
+
+  [[noreturn]] void FailUnsupported(uint8_t token, idx_t token_offset) const {
+    throw IOException(
+        "SSAS fast row parser unsupported token 0x%02x at offset %llu", token,
+        static_cast<unsigned long long>(token_offset));
+  }
+
+  void Ensure(idx_t bytes) const {
+    if (offset + bytes > size) {
+      Fail("payload ended unexpectedly");
+    }
+  }
+
+  uint8_t PeekByte() const {
+    if (offset >= size) {
+      return 0;
+    }
+    return data[offset];
+  }
+
+  uint8_t ReadByte() {
+    Ensure(1);
+    return data[offset++];
+  }
+
+  uint32_t ReadVarUInt() {
+    uint32_t result = 0;
+    for (uint32_t shift = 0; shift <= 28; shift += 7) {
+      auto byte = ReadByte();
+      result |= static_cast<uint32_t>(byte & 0x7F) << shift;
+      if ((byte & 0x80) == 0) {
+        return result;
+      }
+    }
+    Fail("variable integer was too large");
+  }
+
+  static bool TryReadVarUIntAt(const_data_ptr_t input, idx_t input_size,
+                               idx_t start, uint32_t &value_out,
+                               idx_t &next_offset_out) {
+    if (start >= input_size) {
+      return false;
+    }
+    uint32_t value = 0;
+    idx_t pos = start;
+    for (uint32_t shift = 0; shift <= 28; shift += 7) {
+      if (pos >= input_size) {
+        return false;
+      }
+      auto byte = static_cast<uint8_t>(input[pos++]);
+      value |= static_cast<uint32_t>(byte & 0x7F) << shift;
+      if ((byte & 0x80) == 0) {
+        value_out = value;
+        next_offset_out = pos;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  uint16_t ReadUInt16() {
+    Ensure(2);
+    auto value = static_cast<uint16_t>(data[offset]) |
+                 static_cast<uint16_t>(data[offset + 1] << 8);
+    offset += 2;
+    return value;
+  }
+
+  uint32_t ReadUInt32() {
+    Ensure(4);
+    auto value = static_cast<uint32_t>(data[offset]) |
+                 (static_cast<uint32_t>(data[offset + 1]) << 8) |
+                 (static_cast<uint32_t>(data[offset + 2]) << 16) |
+                 (static_cast<uint32_t>(data[offset + 3]) << 24);
+    offset += 4;
+    return value;
+  }
+
+  uint64_t ReadUInt64() {
+    Ensure(8);
+    uint64_t result = 0;
+    for (idx_t i = 0; i < 8; i++) {
+      result |= static_cast<uint64_t>(data[offset + i]) << (i * 8);
+    }
+    offset += 8;
+    return result;
+  }
+
+  double ReadDouble() {
+    auto raw = ReadUInt64();
+    double value;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+  }
+
+  static void AppendUtf8(std::string &result, uint32_t codepoint) {
+    if (codepoint <= 0x7F) {
+      result.push_back(static_cast<char>(codepoint));
+    } else if (codepoint <= 0x7FF) {
+      result.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+      result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint <= 0xFFFF) {
+      result.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+      result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+      result.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+      result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+  }
+
+  std::string FormatDouble(double value) const {
+    std::ostringstream stream;
+    stream << std::setprecision(17) << value;
+    return stream.str();
+  }
+
+  std::string ReadUtf16String(idx_t code_units, bool consume_null) {
+    Ensure(code_units * 2);
+    std::string result;
+    result.reserve(code_units);
+    for (idx_t i = 0; i < code_units; i++) {
+      auto unit = static_cast<uint16_t>(data[offset + i * 2]) |
+                  static_cast<uint16_t>(data[offset + i * 2 + 1] << 8);
+      if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < code_units) {
+        auto next = static_cast<uint16_t>(data[offset + (i + 1) * 2]) |
+                    static_cast<uint16_t>(data[offset + (i + 1) * 2 + 1] << 8);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          auto codepoint =
+              0x10000 + (((unit - 0xD800) << 10) | (next - 0xDC00));
+          AppendUtf8(result, codepoint);
+          i++;
+          continue;
+        }
+      }
+      AppendUtf8(result, unit);
+    }
+    offset += code_units * 2;
+    if (consume_null && offset + 1 < size && data[offset] == 0 &&
+        data[offset + 1] == 0) {
+      offset += 2;
+    } else if (consume_null && offset < size && data[offset] == 0) {
+      offset++;
+    }
+    return result;
+  }
+
+  std::string InternString(uint8_t token) {
+    auto length = ReadVarUInt();
+    auto value = ReadUtf16String(length, token == 0xFD);
+    if (token == 0xF0) {
+      strings.push_back(value);
+    }
+    return value;
+  }
+
+  const std::string &LookupString(uint32_t id) const {
+    if (id == 0 || id > strings.size()) {
+      throw IOException("SSAS fast row parser string id %llu was not defined",
+                        static_cast<unsigned long long>(id));
+    }
+    return strings[id - 1];
+  }
+
+  const ExpandedName &LookupName(uint32_t id) const {
+    auto mapped = names_by_id.find(id);
+    if (mapped != names_by_id.end()) {
+      return mapped->second;
+    }
+    if (id == 0 || id > names.size()) {
+      throw IOException("SSAS fast row parser name id %llu was not defined",
+                        static_cast<unsigned long long>(id));
+    }
+    return names[id - 1];
+  }
+
+  ExpandedName &LookupNameMutable(uint32_t id) {
+    auto mapped = names_by_id.find(id);
+    if (mapped != names_by_id.end()) {
+      return mapped->second;
+    }
+    if (id == 0 || id > names.size()) {
+      throw IOException("SSAS fast row parser name id %llu was not defined",
+                        static_cast<unsigned long long>(id));
+    }
+    return names[id - 1];
+  }
+
+  idx_t ResolveColumnIndex(const std::string &name) const {
+    auto exact = column_indexes.find(name);
+    if (exact != column_indexes.end()) {
+      return exact->second;
+    }
+    auto lowered = column_indexes_lower.find(StringUtil::Lower(name));
+    if (lowered != column_indexes_lower.end()) {
+      return lowered->second;
+    }
+    return DConstants::INVALID_INDEX;
+  }
+
+  void DefineName() {
+    ExpandedName name;
+    auto first = ReadVarUInt();
+    uint32_t name_id = static_cast<uint32_t>(names.size() + 1);
+    uint32_t uri_id;
+    uint32_t prefix_id;
+    uint32_t local_id;
+    if (first > strings.size() + 1) {
+      name_id = first;
+      uri_id = ReadVarUInt();
+      prefix_id = ReadVarUInt();
+      local_id = ReadVarUInt();
+    } else {
+      uri_id = first;
+      prefix_id = ReadVarUInt();
+      local_id = ReadVarUInt();
+    }
+    if (prefix_id != 0) {
+      name.prefix = LookupString(prefix_id);
+    }
+    if (local_id != 0) {
+      name.local_name = DecodeXMLName(ExtractLocalName(LookupString(local_id)));
+    } else if (prefix_id != 0) {
+      name.local_name = DecodeXMLName(ExtractLocalName(LookupString(prefix_id)));
+    }
+    if (uri_id != 0) {
+      name.uri = LookupString(uri_id);
+    }
+    name.column_index = ResolveColumnIndex(name.local_name);
+    names.push_back(name);
+    names_by_id[name_id] = std::move(name);
+  }
+
+  idx_t ResolveCellColumnIndex(uint32_t name_id) const {
+    const auto &name = LookupName(name_id);
+    if (name.column_index != DConstants::INVALID_INDEX) {
+      return name.column_index;
+    }
+    return DConstants::INVALID_INDEX;
+  }
+
+  static bool IsCompactCellAlias(const std::string &name) {
+    if (name.size() < 2 || (name[0] != 'C' && name[0] != 'c')) {
+      return false;
+    }
+    for (idx_t i = 1; i < name.size(); i++) {
+      if (name[i] < '0' || name[i] > '9') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  idx_t ResolveRuntimeCellColumnIndex(uint32_t name_id) {
+    auto resolved = ResolveCellColumnIndex(name_id);
+    if (resolved != DConstants::INVALID_INDEX) {
+      return resolved;
+    }
+    auto &name = LookupNameMutable(name_id);
+    if (!IsCompactCellAlias(name.local_name)) {
+      return DConstants::INVALID_INDEX;
+    }
+    auto entry = runtime_cell_indexes.find(name.local_name);
+    if (entry != runtime_cell_indexes.end()) {
+      name.column_index = entry->second;
+      return entry->second;
+    }
+    if (runtime_column_count >= columns.size()) {
+      return DConstants::INVALID_INDEX;
+    }
+    auto column_index = runtime_column_count++;
+    runtime_cell_indexes[name.local_name] = column_index;
+    name.column_index = column_index;
+    return column_index;
+  }
+
+  void StartElement(uint32_t name_id) {
+    const auto &name = LookupName(name_id);
+    auto kind = ElementKind::OTHER;
+    if (name.local_name == "schema") {
+      kind = ElementKind::SCHEMA;
+      inside_schema++;
+    } else if (name.local_name == "row" && inside_schema == 0) {
+      kind = ElementKind::ROW;
+      current_row.assign(columns.size(), Value(nullptr));
+    }
+    stack.push_back(StackEntry{name_id, kind});
+  }
+
+  void FlushPendingStart() {
+    if (!pending_start) {
+      return;
+    }
+    StartElement(pending_name_id);
+    pending_start = false;
+    pending_name_id = 0;
+  }
+
+  void EndElement() {
+    FlushPendingStart();
+    if (stack.empty()) {
+      return;
+    }
+    auto entry = stack.back();
+    stack.pop_back();
+    if (entry.kind == ElementKind::ROW) {
+      if (on_row && !on_row(current_row)) {
+        stopped_early = true;
+      }
+      produced_rows++;
+      current_row.clear();
+      return;
+    }
+    if (entry.kind == ElementKind::SCHEMA && inside_schema > 0) {
+      inside_schema--;
+      return;
+    }
+  }
+
+  std::string ReadInlineUtf16Value() {
+    auto length = ReadVarUInt();
+    return ReadUtf16String(length, false);
+  }
+
+  std::string ReadTextValue(uint8_t token) {
+    switch (token) {
+    case 0x04:
+      return FormatDouble(ReadDouble());
+    case 0x08:
+      return std::to_string(static_cast<int64_t>(ReadUInt64()));
+    case 0x10:
+    case 0x0E:
+    case 0x11:
+      return ReadInlineUtf16Value();
+    case 0x12:
+      return std::to_string(static_cast<int8_t>(ReadByte()));
+    case 0x13:
+      return std::to_string(static_cast<int16_t>(ReadUInt16()));
+    case 0x14:
+      return std::to_string(static_cast<int32_t>(ReadUInt32()));
+    case 0x15:
+      return FormatDouble(ReadDouble());
+    case 0x18:
+      return std::to_string(ReadByte());
+    case 0x19:
+      return std::to_string(ReadUInt16());
+    case 0x1A:
+      return std::to_string(ReadUInt32());
+    case 0x1B:
+      return std::to_string(ReadUInt64());
+    case 0x16:
+      return "true";
+    case 0x17:
+      return "false";
+    case EMPTY_TEXT_TOKEN:
+      return std::string();
+    default:
+      FailUnsupported(token, offset - 1);
+    }
+  }
+
+  Value ValueFromText(const std::string &text,
+                      XmlaCoercionKind coercion_kind) const {
+    return CoerceXmlValue(text, coercion_kind);
+  }
+
+  Value ReadCellValue(uint8_t token, XmlaCoercionKind coercion_kind) {
+    switch (token) {
+    case 0x04:
+    case 0x15: {
+      auto value = ReadDouble();
+      if (coercion_kind == XmlaCoercionKind::DOUBLE ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::DOUBLE(value);
+      }
+      return ValueFromText(FormatDouble(value), coercion_kind);
+    }
+    case 0x08: {
+      auto value = static_cast<int64_t>(ReadUInt64());
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x12: {
+      auto value = static_cast<int8_t>(ReadByte());
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x13: {
+      auto value = static_cast<int16_t>(ReadUInt16());
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x14: {
+      auto value = static_cast<int32_t>(ReadUInt32());
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x18: {
+      auto value = static_cast<uint64_t>(ReadByte());
+      if (coercion_kind == XmlaCoercionKind::UBIGINT) {
+        return Value::UBIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(static_cast<int64_t>(value));
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x19: {
+      auto value = static_cast<uint64_t>(ReadUInt16());
+      if (coercion_kind == XmlaCoercionKind::UBIGINT) {
+        return Value::UBIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(static_cast<int64_t>(value));
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x1A: {
+      auto value = static_cast<uint64_t>(ReadUInt32());
+      if (coercion_kind == XmlaCoercionKind::UBIGINT) {
+        return Value::UBIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::BIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BIGINT(static_cast<int64_t>(value));
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x1B: {
+      auto value = ReadUInt64();
+      if (coercion_kind == XmlaCoercionKind::UBIGINT ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::UBIGINT(value);
+      }
+      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
+        return Value::DOUBLE(static_cast<double>(value));
+      }
+      return ValueFromText(std::to_string(value), coercion_kind);
+    }
+    case 0x16:
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(true);
+      }
+      return ValueFromText("true", coercion_kind);
+    case 0x17:
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(false);
+      }
+      return ValueFromText("false", coercion_kind);
+    case 0x10:
+    case 0x0E:
+    case 0x11:
+      return ValueFromText(ReadInlineUtf16Value(), coercion_kind);
+    case EMPTY_TEXT_TOKEN:
+      return ValueFromText(std::string(), coercion_kind);
+    default:
+      FailUnsupported(token, offset - 1);
+    }
+  }
+
+  void ParseAttribute() {
+    ReadVarUInt();
+    auto value_token = ReadByte();
+    ReadTextValue(value_token);
+  }
+
+  void ParseStartElement() {
+    FlushPendingStart();
+    pending_name_id = ReadVarUInt();
+    pending_start = true;
+  }
+
+  bool ParentIsRow() const {
+    return !stack.empty() && stack.back().kind == ElementKind::ROW;
+  }
+
+  idx_t ActiveColumnIndex() {
+    if (pending_start && ParentIsRow()) {
+      return ResolveRuntimeCellColumnIndex(pending_name_id);
+    }
+    if (stack.size() >= 2 && stack[stack.size() - 2].kind == ElementKind::ROW) {
+      return ResolveRuntimeCellColumnIndex(stack.back().name_id);
+    }
+    return DConstants::INVALID_INDEX;
+  }
+
+  void ParseText(uint8_t token) {
+    auto column_index = ActiveColumnIndex();
+    if (debug_trace_enabled && cell_trace_count < CELL_TRACE_LIMIT) {
+      std::string cell_name;
+      if (pending_start) {
+        cell_name = LookupName(pending_name_id).local_name;
+      } else if (!stack.empty()) {
+        cell_name = LookupName(stack.back().name_id).local_name;
+      }
+      std::fprintf(stderr,
+                   "[pbi_scanner] SSAS fast cell=%s token=0x%02x "
+                   "parent_is_row=%d column_index=%llu\n",
+                   cell_name.c_str(), static_cast<unsigned int>(token),
+                   ParentIsRow() ? 1 : 0,
+                   static_cast<unsigned long long>(column_index));
+      cell_trace_count++;
+    }
+    FlushPendingStart();
+    if (column_index == DConstants::INVALID_INDEX || current_row.empty()) {
+      ReadTextValue(token);
+      return;
+    }
+    current_row[column_index] =
+        ReadCellValue(token, columns[column_index].coercion_kind);
+  }
+
+  void ParseRecord() {
+    auto token_offset = offset;
+    auto token = ReadByte();
+    switch (token) {
+    case 0x00:
+      return;
+    case 0xF0:
+    case 0xFD:
+    case 0xFE:
+      InternString(token);
+      return;
+    case 0xEF:
+      DefineName();
+      return;
+    case 0xF8:
+      ParseStartElement();
+      return;
+    case 0x01: {
+      uint32_t maybe_name_id = 0;
+      idx_t next_offset = offset;
+      if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
+          (names_by_id.find(maybe_name_id) != names_by_id.end() ||
+           (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
+        ParseStartElement();
+        return;
+      }
+      FlushPendingStart();
+      return;
+    }
+    case 0xF6:
+      ParseAttribute();
+      return;
+    case 0xF5:
+      FlushPendingStart();
+      return;
+    case 0xF7:
+      EndElement();
+      return;
+    case 0x04:
+    case 0x08:
+    case 0x10:
+    case 0x0E:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
+    case 0x16:
+    case 0x17:
+    case EMPTY_TEXT_TOKEN:
+      ParseText(token);
+      return;
+    default:
+      FailUnsupported(token, token_offset);
+    }
+  }
+
+  const_data_ptr_t data;
+  idx_t size;
+  idx_t offset = 0;
+  const std::vector<XmlaColumn> &columns;
+  const std::function<bool(const std::vector<Value> &row)> &on_row;
+  const std::function<bool()> &should_stop;
+  std::vector<std::string> strings;
+  std::vector<ExpandedName> names;
+  std::unordered_map<uint32_t, ExpandedName> names_by_id;
+  std::unordered_map<std::string, idx_t> column_indexes;
+  std::unordered_map<std::string, idx_t> column_indexes_lower;
+  std::unordered_map<std::string, idx_t> runtime_cell_indexes;
+  std::vector<StackEntry> stack;
+  std::vector<Value> current_row;
+  idx_t inside_schema = 0;
+  idx_t runtime_column_count = 0;
+  idx_t produced_rows = 0;
+  idx_t cell_trace_count = 0;
+  uint32_t pending_name_id = 0;
+  bool pending_start = false;
+  bool stopped_early = false;
+  bool debug_trace_enabled = false;
+};
+
 static HttpHeaders XmlaHeaders(const std::string &access_token,
                                XmlaTransportMode transport_mode) {
   // ADOMD.NET / DAX Studio also negotiate SOAP ProtocolCapabilities sx (binary
@@ -2434,6 +3129,32 @@ BuildNormalizedPayloadCandidates(const std::string &payload) {
   return candidates;
 }
 
+static bool TryParseSsasRowsFast(
+    const std::string &payload, const std::vector<XmlaColumn> &known_columns,
+    const std::function<bool(const std::vector<Value> &row)> &on_row,
+    const std::function<bool()> &should_stop) {
+  auto candidates = BuildNormalizedPayloadCandidates(payload);
+  for (auto offset : candidates) {
+    auto candidate_size = payload.size() - offset;
+    if (candidate_size == 0) {
+      continue;
+    }
+    auto candidate_ptr = const_data_ptr_cast(payload.data() + offset);
+    SsasFastRowParser parser(candidate_ptr, candidate_size, known_columns,
+                             on_row, should_stop);
+    try {
+      parser.ParseDocument();
+      return true;
+    } catch (const Exception &) {
+      if (parser.ProducedRows() > 0) {
+        throw;
+      }
+      continue;
+    }
+  }
+  return false;
+}
+
 static bool IsRecoverableEarlyFramingError(const Exception &ex,
                                            idx_t candidate_offset) {
   if (candidate_offset >= 8) {
@@ -2522,10 +3243,13 @@ static void ParseBinXmlResponse(const std::string &payload,
   throw IOException("BINXML payload was empty after normalization");
 }
 
-static bool DecodeBufferedXmlaResponse(const HttpResponse &response,
-                                       const std::string &buffered_response,
-                                       XmlaStreamParser &parser,
-                                       const char *operation_label) {
+static bool DecodeBufferedXmlaResponse(
+    const HttpResponse &response, const std::string &buffered_response,
+    XmlaStreamParser &parser, const char *operation_label,
+    const std::vector<XmlaColumn> *known_columns = nullptr,
+    const std::function<bool(const std::vector<Value> &row)> *on_row = nullptr,
+    const std::function<bool()> *should_stop = nullptr) {
+  auto stop_callback = should_stop ? *should_stop : std::function<bool()>();
   if (IsSxXpressXmlaResponse(response)) {
     auto decompress_start = std::chrono::steady_clock::now();
     auto decompressed = DecompressXpressLz77Framed(buffered_response);
@@ -2533,6 +3257,15 @@ static bool DecodeBufferedXmlaResponse(const HttpResponse &response,
         (std::string("SX_XPRESS ") + operation_label + " decompress").c_str(),
         decompress_start);
     auto parse_start = std::chrono::steady_clock::now();
+    if (known_columns && on_row &&
+        TryParseSsasRowsFast(decompressed, *known_columns, *on_row,
+                             stop_callback)) {
+      DebugTiming((std::string("SX_XPRESS ") + operation_label +
+                   " fast parse")
+                      .c_str(),
+                  parse_start);
+      return true;
+    }
     ParseBinXmlResponse(decompressed, parser);
     DebugTiming(
         (std::string("SX_XPRESS ") + operation_label + " parse").c_str(),
@@ -2541,6 +3274,14 @@ static bool DecodeBufferedXmlaResponse(const HttpResponse &response,
   }
   if (IsSxXmlaResponse(response)) {
     auto parse_start = std::chrono::steady_clock::now();
+    if (known_columns && on_row &&
+        TryParseSsasRowsFast(buffered_response, *known_columns, *on_row,
+                             stop_callback)) {
+      DebugTiming(
+          (std::string("SX ") + operation_label + " fast parse").c_str(),
+          parse_start);
+      return true;
+    }
     ParseBinXmlResponse(buffered_response, parser);
     DebugTiming((std::string("SX ") + operation_label + " parse").c_str(),
                 parse_start);
@@ -2796,6 +3537,7 @@ std::vector<XmlaColumn> XmlaExecutor::ProbeSchema(const XmlaRequest &request) {
 
 void XmlaExecutor::ExecuteStreaming(
     const XmlaRequest &request,
+    const std::vector<XmlaColumn> *known_columns,
     const std::function<void(const std::vector<XmlaColumn> &columns)>
         &on_schema,
     const std::function<bool(const std::vector<Value> &row)> &on_row,
@@ -2824,7 +3566,9 @@ void XmlaExecutor::ExecuteStreaming(
   bool decoded_response = false;
   if (buffer_response && !(should_stop && should_stop())) {
     decoded_response = DecodeBufferedXmlaResponse(response, buffered_response,
-                                                  parser, "execution");
+                                                  parser, "execution",
+                                                  known_columns, &on_row,
+                                                  &should_stop);
   }
   parser.Finish();
   if (should_stop && should_stop() && response.HasRequestError()) {

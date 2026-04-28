@@ -166,8 +166,11 @@ duckdb.exe -unsigned -c "LOAD './build/release/extension/pbi_scanner/pbi_scanner
 
 - **CI/offline tests**: `make test` (sqllogictest under `test/sql/`) and optional `uv run bench_native_http.py --smoke`
 - **Live benchmarking**: `uv run --group bench query_semantic_model_minimal.py`
+- **Minimal live SQL smoke**: `uv run query_semantic_model_sql_minimal.py`
 - **Live bench inputs**: set `PBI_BENCH_CONNECTION_STRING`, `PBI_BENCH_DAX`, optional `PBI_BENCH_SECRET_NAME`
 - **No real credentials in git**: use env vars, gitignored `.env`, or files under `local/`
+
+For repeated SQL smoke runs after the DuckDB `azure` extension is installed, set `PBI_SQL_INSTALL_AZURE=0` to skip the install check/download step.
 
 ### Benchmark and Transport Knobs
 

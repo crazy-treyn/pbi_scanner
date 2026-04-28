@@ -9,6 +9,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/vector.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include <atomic>
@@ -85,6 +86,85 @@ static int64_t ResolveCacheTtlSeconds(const char *name) {
   }
 }
 
+static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
+                                  const Value &value,
+                                  const LogicalType &target_type) {
+  if (value.IsNull()) {
+    FlatVector::SetNull(vector, row_idx, true);
+    return true;
+  }
+
+  auto value_type = value.type().id();
+  switch (target_type.id()) {
+  case LogicalTypeId::BOOLEAN:
+    if (value_type == LogicalTypeId::BOOLEAN) {
+      FlatVector::GetData<bool>(vector)[row_idx] = value.GetValueUnsafe<bool>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::BIGINT:
+    if (value_type == LogicalTypeId::BIGINT) {
+      FlatVector::GetData<int64_t>(vector)[row_idx] =
+          value.GetValueUnsafe<int64_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::UBIGINT:
+    if (value_type == LogicalTypeId::UBIGINT) {
+      FlatVector::GetData<uint64_t>(vector)[row_idx] =
+          value.GetValueUnsafe<uint64_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::DOUBLE:
+    if (value_type == LogicalTypeId::DOUBLE) {
+      FlatVector::GetData<double>(vector)[row_idx] =
+          value.GetValueUnsafe<double>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::DATE:
+    if (value_type == LogicalTypeId::DATE) {
+      FlatVector::GetData<date_t>(vector)[row_idx] =
+          value.GetValueUnsafe<date_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::TIME:
+    if (value_type == LogicalTypeId::TIME) {
+      FlatVector::GetData<dtime_t>(vector)[row_idx] =
+          value.GetValueUnsafe<dtime_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::TIMESTAMP:
+    if (value_type == LogicalTypeId::TIMESTAMP) {
+      FlatVector::GetData<timestamp_t>(vector)[row_idx] =
+          value.GetValueUnsafe<timestamp_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::TIMESTAMP_TZ:
+    if (value_type == LogicalTypeId::TIMESTAMP_TZ) {
+      FlatVector::GetData<timestamp_tz_t>(vector)[row_idx] =
+          value.GetValueUnsafe<timestamp_tz_t>();
+      return true;
+    }
+    break;
+  case LogicalTypeId::VARCHAR:
+    if (value_type == LogicalTypeId::VARCHAR) {
+      auto &text = StringValue::Get(value);
+      FlatVector::GetData<string_t>(vector)[row_idx] =
+          StringVector::AddString(vector, text.data(), text.size());
+      return true;
+    }
+    break;
+  default:
+    break;
+  }
+  return false;
+}
+
 static bool
 HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
                          const string &name) {
@@ -133,12 +213,43 @@ static bool CreateDirectoryIfMissing(const string &path) {
   return false;
 }
 
+static bool IsPathSeparator(char value) {
+  return value == '/' || value == '\\';
+}
+
+static idx_t PathRootLength(const string &path) {
+#ifdef _WIN32
+  if (path.size() >= 2 && IsPathSeparator(path[0]) &&
+      IsPathSeparator(path[1])) {
+    auto server_end = path.find_first_of("/\\", 2);
+    if (server_end == string::npos) {
+      return path.size();
+    }
+    auto share_end = path.find_first_of("/\\", server_end + 1);
+    if (share_end == string::npos) {
+      return path.size();
+    }
+    return share_end + 1;
+  }
+  if (path.size() >= 2 && path[1] == ':') {
+    if (path.size() >= 3 && IsPathSeparator(path[2])) {
+      return 3;
+    }
+    return 2;
+  }
+#endif
+  if (!path.empty() && IsPathSeparator(path[0])) {
+    return 1;
+  }
+  return 0;
+}
+
 static string JoinPath(const string &left, const string &right) {
   if (left.empty()) {
     return right;
   }
   auto last = left[left.size() - 1];
-  if (last == '/' || last == '\\') {
+  if (IsPathSeparator(last)) {
     return left + right;
   }
 #ifdef _WIN32
@@ -263,11 +374,15 @@ static bool EnsureCacheDirectory(const string &cache_dir) {
   if (cache_dir.empty()) {
     return false;
   }
-  string current;
-  for (idx_t i = 0; i < cache_dir.size(); i++) {
-    current.push_back(cache_dir[i]);
-    if (cache_dir[i] == '/' || cache_dir[i] == '\\') {
-      if (current.size() > 1 && !CreateDirectoryIfMissing(current)) {
+  auto root_length = PathRootLength(cache_dir);
+  if (root_length >= cache_dir.size()) {
+    return true;
+  }
+  for (idx_t i = root_length; i < cache_dir.size(); i++) {
+    if (IsPathSeparator(cache_dir[i])) {
+      auto current = cache_dir.substr(0, i);
+      if (current.size() > root_length &&
+          !CreateDirectoryIfMissing(current)) {
         return false;
       }
     }
@@ -673,6 +788,18 @@ bool TestMetadataCacheRoundTrip() {
   if (!CacheEntryExpired(now - 2, 1)) {
     return false;
   }
+#ifdef _WIN32
+  if (PathRootLength("C:\\Users\\pbi_scanner") != 3) {
+    return false;
+  }
+  if (PathRootLength("\\\\server\\share\\pbi_scanner") != 15) {
+    return false;
+  }
+#else
+  if (PathRootLength("/tmp/pbi_scanner") != 1) {
+    return false;
+  }
+#endif
   return true;
 }
 
@@ -829,7 +956,7 @@ private:
     idx_t current_chunk_size = 0;
     try {
       executor->ExecuteStreaming(
-          request, nullptr,
+          request, &columns, nullptr,
           [&](const std::vector<Value> &row) {
             if (DebugTimingsEnabled() && !first_row_logged) {
               DebugTiming("ExecuteStreaming first row", worker_start);
@@ -845,8 +972,13 @@ private:
             }
 
             for (idx_t column_idx = 0; column_idx < row.size(); column_idx++) {
-              current_chunk->SetValue(column_idx, current_chunk_size,
-                                      row[column_idx]);
+              auto &vector = current_chunk->data[column_idx];
+              if (!TrySetFlatVectorValue(vector, current_chunk_size,
+                                         row[column_idx],
+                                         column_types[column_idx])) {
+                current_chunk->SetValue(column_idx, current_chunk_size,
+                                        row[column_idx]);
+              }
             }
             current_chunk_size++;
             produced_rows++;
