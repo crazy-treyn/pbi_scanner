@@ -10,6 +10,12 @@
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/vector.hpp"
+#if __has_include("duckdb/common/vector/flat_vector.hpp")
+#include "duckdb/common/vector/flat_vector.hpp"
+#define PBI_SCANNER_HAS_FLAT_VECTOR_GET_DATA_MUTABLE 1
+#else
+#define PBI_SCANNER_HAS_FLAT_VECTOR_GET_DATA_MUTABLE 0
+#endif
 #include "duckdb/main/client_context.hpp"
 
 #include <atomic>
@@ -86,6 +92,14 @@ static int64_t ResolveCacheTtlSeconds(const char *name) {
   }
 }
 
+template <class T> static T *GetFlatVectorDataMutable(Vector &vector) {
+#if PBI_SCANNER_HAS_FLAT_VECTOR_GET_DATA_MUTABLE
+  return FlatVector::GetDataMutable<T>(vector);
+#else
+  return FlatVector::GetData<T>(vector);
+#endif
+}
+
 static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
                                   const Value &value,
                                   const LogicalType &target_type) {
@@ -98,55 +112,56 @@ static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
   switch (target_type.id()) {
   case LogicalTypeId::BOOLEAN:
     if (value_type == LogicalTypeId::BOOLEAN) {
-      FlatVector::GetData<bool>(vector)[row_idx] = value.GetValueUnsafe<bool>();
+      GetFlatVectorDataMutable<bool>(vector)[row_idx] =
+          value.GetValueUnsafe<bool>();
       return true;
     }
     break;
   case LogicalTypeId::BIGINT:
     if (value_type == LogicalTypeId::BIGINT) {
-      FlatVector::GetData<int64_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<int64_t>(vector)[row_idx] =
           value.GetValueUnsafe<int64_t>();
       return true;
     }
     break;
   case LogicalTypeId::UBIGINT:
     if (value_type == LogicalTypeId::UBIGINT) {
-      FlatVector::GetData<uint64_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<uint64_t>(vector)[row_idx] =
           value.GetValueUnsafe<uint64_t>();
       return true;
     }
     break;
   case LogicalTypeId::DOUBLE:
     if (value_type == LogicalTypeId::DOUBLE) {
-      FlatVector::GetData<double>(vector)[row_idx] =
+      GetFlatVectorDataMutable<double>(vector)[row_idx] =
           value.GetValueUnsafe<double>();
       return true;
     }
     break;
   case LogicalTypeId::DATE:
     if (value_type == LogicalTypeId::DATE) {
-      FlatVector::GetData<date_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<date_t>(vector)[row_idx] =
           value.GetValueUnsafe<date_t>();
       return true;
     }
     break;
   case LogicalTypeId::TIME:
     if (value_type == LogicalTypeId::TIME) {
-      FlatVector::GetData<dtime_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<dtime_t>(vector)[row_idx] =
           value.GetValueUnsafe<dtime_t>();
       return true;
     }
     break;
   case LogicalTypeId::TIMESTAMP:
     if (value_type == LogicalTypeId::TIMESTAMP) {
-      FlatVector::GetData<timestamp_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<timestamp_t>(vector)[row_idx] =
           value.GetValueUnsafe<timestamp_t>();
       return true;
     }
     break;
   case LogicalTypeId::TIMESTAMP_TZ:
     if (value_type == LogicalTypeId::TIMESTAMP_TZ) {
-      FlatVector::GetData<timestamp_tz_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<timestamp_tz_t>(vector)[row_idx] =
           value.GetValueUnsafe<timestamp_tz_t>();
       return true;
     }
@@ -154,7 +169,7 @@ static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
   case LogicalTypeId::VARCHAR:
     if (value_type == LogicalTypeId::VARCHAR) {
       auto &text = StringValue::Get(value);
-      FlatVector::GetData<string_t>(vector)[row_idx] =
+      GetFlatVectorDataMutable<string_t>(vector)[row_idx] =
           StringVector::AddString(vector, text.data(), text.size());
       return true;
     }
@@ -975,8 +990,7 @@ private:
               if (!TrySetFlatVectorValue(vector, current_chunk_size,
                                          row[column_idx],
                                          column_types[column_idx])) {
-                current_chunk->SetValue(column_idx, current_chunk_size,
-                                        row[column_idx]);
+                vector.SetValue(current_chunk_size, row[column_idx]);
               }
             }
             current_chunk_size++;

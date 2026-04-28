@@ -136,6 +136,7 @@
 - `make format` or `make format-fix`: apply formatting fixes.
 - `make tidy-check`: run clang-tidy over `src/`.
 - These quality targets use `uv` to provide `black` and `clang-tidy` locally; update `pyproject.toml` and `uv.lock` if tool requirements change.
+- On Windows shells without `make` or DuckDB's pinned formatter tools on `PATH`, run the formatter directly with `uv run --group format --with clang-format==11.0.1 --with cmake-format python duckdb/scripts/format.py --all --fix --noconfirm --directories src test`; replace `--fix --noconfirm` with `--check` for CI-equivalent validation.
 - CI runs `format` and `tidy` via `MainDistributionPipeline.yml`.
 
 ## C++ Formatting Rules
