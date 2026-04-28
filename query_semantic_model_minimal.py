@@ -3,26 +3,49 @@ Local-only: run real DAX against Power BI for development and performance
 benchmarking. Not used in CI (see README Performance + AGENTS.md).
 
 Configuration (prefer env vars so nothing secret is hardcoded):
-  PBI_BENCH_CONNECTION_STRING — Power BI XMLA connection string
-  PBI_BENCH_DAX — DAX to run (e.g. EVALUATE 'My Table')
-  PBI_BENCH_SECRET_NAME — optional; default pbi_cli
-  PBI_BENCH_MODE — count or materialize; default materialize
-  PBI_BENCH_ITERATIONS — runs in the same process; default 1
-  PBI_BENCH_METADATA_PROBE — set 1/true to run pbi_* metadata probes
-  PBI_BENCH_METADATA_FAIL_FAST — optional; stop on first metadata failure
-  PBI_BENCH_METADATA_MIN_ROWS — optional; minimum rows for tables/columns (default 1)
-  PBI_BENCH_METADATA_PRINT_ROWS — optional; print sampled metadata rows (default on; set 0/false/no/off to disable)
-  PBI_BENCH_METADATA_SAMPLE_ROWS — optional; metadata display sample size (default 100)
-  PBI_BENCH_METADATA_MATRIX — optional; run metadata probes across transport profiles
-  PBI_BENCH_METADATA_INCLUDE_PLAIN — optional; include plain transport in matrix mode
-  PBI_BENCH_METADATA_STRICT_SX — optional; enforce sx_xpress primary pass (soft-fail becomes hard-fail)
-  PBI_BENCH_DIRECT_XMLA — resolve powerbi:// to direct XMLA before running
-  PBI_SCANNER_XMLA_TRANSPORT — plain, sx, xpress, or sx_xpress; default sx_xpress
-  PBI_SCANNER_DISABLE_METADATA_CACHE — set 1/true to force cold target/schema probes
-  PBI_SCANNER_CACHE_DIR — override metadata cache directory
+  PBI_BENCH_CONNECTION_STRING
+      Power BI XMLA connection string.
+  PBI_BENCH_DAX
+      DAX to run, for example EVALUATE 'My Table'.
+  PBI_BENCH_SECRET_NAME
+      Optional; defaults to pbi_cli.
+  PBI_BENCH_MODE
+      count or materialize; defaults to materialize.
+  PBI_BENCH_ITERATIONS
+      Runs in the same process; defaults to 1.
+  PBI_BENCH_METADATA_PROBE
+      Set 1/true to run pbi_* metadata probes.
+  PBI_BENCH_METADATA_FAIL_FAST
+      Optional; stop on first metadata failure.
+  PBI_BENCH_METADATA_MIN_ROWS
+      Optional; minimum rows for tables/columns; defaults to 1.
+  PBI_BENCH_METADATA_PRINT_ROWS
+      Optional; print sampled metadata rows; defaults on.
+  PBI_BENCH_METADATA_SAMPLE_ROWS
+      Optional; metadata display sample size; defaults to 100.
+  PBI_BENCH_METADATA_MATRIX
+      Optional; run metadata probes across transport profiles.
+  PBI_BENCH_METADATA_INCLUDE_PLAIN
+      Optional; include plain transport in matrix mode.
+  PBI_BENCH_METADATA_STRICT_SX
+      Optional; enforce sx_xpress primary pass.
+  PBI_BENCH_DIRECT_XMLA
+      Resolve powerbi:// to direct XMLA before running.
+  PBI_BENCH_USE_BUNDLED_CLI
+      Set 1/true to force bundled DuckDB CLI fallback.
+  PBI_BENCH_USE_DUCKDB_AZURE_SECRET
+      On Windows, set 1/true to use DuckDB Azure secrets instead of direct
+      Azure CLI tokens.
+  PBI_SCANNER_XMLA_TRANSPORT
+      plain, sx, xpress, or sx_xpress; defaults to sx_xpress.
+  PBI_SCANNER_DISABLE_METADATA_CACHE
+      Set 1/true to force cold target/schema probes.
+  PBI_SCANNER_CACHE_DIR
+      Override metadata cache directory.
 
-If `duckdb.connect` is missing from the Python `duckdb` package, this script
-falls back to the bundled `./build/release/duckdb` CLI (after `make release`).
+If `duckdb.connect` is missing from the Python `duckdb` package, or if
+PBI_BENCH_USE_BUNDLED_CLI is truthy, this script falls back to the bundled
+`./build/release/duckdb` CLI (after `make release`).
 
 Run with uv (installs the `bench` group / Python duckdb when needed):
   uv run --group bench query_semantic_model_minimal.py
@@ -33,11 +56,13 @@ Metadata probe examples:
   PBI_BENCH_METADATA_PROBE=1 PBI_BENCH_METADATA_STRICT_SX=1 uv run --group bench query_semantic_model_minimal.py
   PBI_SCANNER_XMLA_TRANSPORT=xpress PBI_BENCH_METADATA_PROBE=1 uv run --group bench query_semantic_model_minimal.py
 """
+
 from __future__ import annotations
 
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -137,9 +162,10 @@ def _parse_powerbi_data_source(data_source: str) -> tuple[str, str]:
 
 
 def _az_access_token() -> str:
+    az_command = shutil.which("az") or shutil.which("az.cmd") or "az"
     proc = subprocess.run(
         [
-            "az",
+            az_command,
             "account",
             "get-access-token",
             "--scope",
@@ -232,8 +258,7 @@ def resolve_direct_xmla_connection_string(connection_string: str) -> str:
         (
             item
             for item in datasets
-            if str(item.get("datasetName", "")).casefold()
-            == initial_catalog.casefold()
+            if str(item.get("datasetName", "")).casefold() == initial_catalog.casefold()
         ),
         None,
     )
@@ -251,7 +276,9 @@ def resolve_direct_xmla_connection_string(connection_string: str) -> str:
 
     database_name = str(dataset["databaseName"])
     fixed_cluster_uri = str(cluster["FixedClusterUri"]).rstrip("/") + "/"
-    direct_source = f"{fixed_cluster_uri}xmla?vs=sobe_wowvirtualserver&db={database_name}"
+    direct_source = (
+        f"{fixed_cluster_uri}xmla?vs=sobe_wowvirtualserver&db={database_name}"
+    )
     direct_catalog = f"sobe_wowvirtualserver-{database_name}"
     direct = f"Data Source={direct_source};Initial Catalog={direct_catalog};"
     print(f"[python] direct XMLA connection string: {direct}")
@@ -264,13 +291,22 @@ def log_timing(label: str, started_at: float) -> None:
 
 
 def _dax_sql(
-    connection_string: str, dax_query: str, secret_name: str, mode: str
+    connection_string: str,
+    dax_query: str,
+    secret_name: str,
+    mode: str,
+    access_token: str | None = None,
 ) -> str:
+    auth_sql = (
+        f"access_token := '{_sql_escape(access_token)}'"
+        if access_token is not None
+        else f"secret_name := '{_sql_escape(secret_name)}'"
+    )
     source_sql = f"""
         dax_query(
-            '{connection_string.replace("'", "''")}',
-            '{dax_query.replace("'", "''")}',
-            secret_name := '{secret_name.replace("'", "''")}'
+            '{_sql_escape(connection_string)}',
+            '{_sql_escape(dax_query)}',
+            {auth_sql}
         )
     """
     if mode == "count":
@@ -303,7 +339,9 @@ def _metadata_display_sample_rows() -> int:
 
 
 def _default_xmla_transport() -> str:
-    return os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "sx_xpress").strip() or "sx_xpress"
+    return (
+        os.environ.get("PBI_SCANNER_XMLA_TRANSPORT", "sx_xpress").strip() or "sx_xpress"
+    )
 
 
 def _sql_escape(value: str) -> str:
@@ -311,14 +349,17 @@ def _sql_escape(value: str) -> str:
 
 
 def _metadata_function_sql(
-    function_name: str, connection_string: str, secret_name: str
+    function_name: str,
+    connection_string: str,
+    secret_name: str,
+    access_token: str | None = None,
 ) -> str:
-    return (
-        f"{function_name}("
-        f"'{_sql_escape(connection_string)}', "
-        f"secret_name := '{_sql_escape(secret_name)}'"
-        f")"
+    auth_sql = (
+        f"access_token := '{_sql_escape(access_token)}'"
+        if access_token is not None
+        else f"secret_name := '{_sql_escape(secret_name)}'"
     )
+    return f"{function_name}('{_sql_escape(connection_string)}', {auth_sql})"
 
 
 def _normalized_column_name(value: str) -> str:
@@ -340,7 +381,9 @@ def _find_matching_columns(
     return matches
 
 
-def _has_non_empty_value(rows: list[tuple[object, ...]], columns: list[str], target_column: str) -> bool:
+def _has_non_empty_value(
+    rows: list[tuple[object, ...]], columns: list[str], target_column: str
+) -> bool:
     column_idx = columns.index(target_column)
     for row in rows:
         value = row[column_idx]
@@ -409,7 +452,9 @@ def _metadata_checks(min_rows: int) -> list[dict[str, object]]:
     ]
 
 
-def _metadata_transport_profiles(matrix_mode: bool, include_plain: bool) -> list[dict[str, str]]:
+def _metadata_transport_profiles(
+    matrix_mode: bool, include_plain: bool
+) -> list[dict[str, str]]:
     configured_transport = _default_xmla_transport()
     profiles: list[dict[str, str]] = [
         {"name": "default", "transport": configured_transport, "kind": "primary"}
@@ -417,7 +462,9 @@ def _metadata_transport_profiles(matrix_mode: bool, include_plain: bool) -> list
     if not matrix_mode:
         return profiles
     if configured_transport != "xpress":
-        profiles.append({"name": "xpress", "transport": "xpress", "kind": "compatibility"})
+        profiles.append(
+            {"name": "xpress", "transport": "xpress", "kind": "compatibility"}
+        )
     if include_plain and configured_transport != "plain":
         profiles.append({"name": "plain", "transport": "plain", "kind": "diagnostic"})
     return profiles
@@ -427,6 +474,7 @@ def _run_metadata_probe_profile(
     con: object,
     connection_string: str,
     secret_name: str,
+    access_token: str | None,
     profile_name: str,
     transport: str,
     checks: list[dict[str, object]],
@@ -439,7 +487,9 @@ def _run_metadata_probe_profile(
     print(f"[metadata][PROFILE] {profile_name}: transport={transport}")
     for check in checks:
         name = str(check["name"])
-        source_sql = _metadata_function_sql(name, connection_string, secret_name)
+        source_sql = _metadata_function_sql(
+            name, connection_string, secret_name, access_token
+        )
         results[name] = {
             "ok": False,
             "profile": profile_name,
@@ -452,7 +502,9 @@ def _run_metadata_probe_profile(
         count_started_at = perf_counter()
         try:
             total_rows = int(
-                con.sql(f"SELECT count(*) AS total_rows FROM {source_sql}").fetchone()[0]
+                con.sql(f"SELECT count(*) AS total_rows FROM {source_sql}").fetchone()[
+                    0
+                ]
             )
         except Exception as exc:
             message = f"{name}: count query failed: {exc}"
@@ -470,7 +522,9 @@ def _run_metadata_probe_profile(
             message = f"expected at least {check['min_rows']} rows, got {total_rows}"
             results[name]["stage"] = "count_threshold"
             results[name]["message"] = message
-            print(f"[metadata][FAIL][{profile_name}][{name}][count_threshold] {message}")
+            print(
+                f"[metadata][FAIL][{profile_name}][{name}][count_threshold] {message}"
+            )
             if fail_fast:
                 raise RuntimeError(f"{name}: {message}")
             continue
@@ -575,15 +629,23 @@ def _classify_metadata_outcomes(
         per_profile = profile_results.get(function_name, {})
         default_result = per_profile.get(default_profile_name)
         if default_result and bool(default_result["ok"]):
-            pass_lines.append(f"{function_name}: PASS in primary profile ({default_profile_name})")
+            pass_lines.append(
+                f"{function_name}: PASS in primary profile ({default_profile_name})"
+            )
             continue
 
         compatible_result = (
-            per_profile.get(compatibility_profile_name) if compatibility_profile_name else None
+            per_profile.get(compatibility_profile_name)
+            if compatibility_profile_name
+            else None
         )
         if compatible_result and bool(compatible_result["ok"]):
-            default_stage = str(default_result["stage"]) if default_result else "unknown"
-            default_message = str(default_result["message"]) if default_result else "unknown failure"
+            default_stage = (
+                str(default_result["stage"]) if default_result else "unknown"
+            )
+            default_message = (
+                str(default_result["message"]) if default_result else "unknown failure"
+            )
             soft_fail_lines.append(
                 f"{function_name}: SOFT_FAIL in primary ({default_profile_name}, stage={default_stage}) "
                 f"but PASS in compatibility ({compatibility_profile_name}); cause={default_message}"
@@ -605,7 +667,12 @@ def _classify_metadata_outcomes(
     return pass_lines, soft_fail_lines, hard_fail_lines
 
 
-def _run_metadata_probes(con: object, connection_string: str, secret_name: str) -> None:
+def _run_metadata_probes(
+    con: object,
+    connection_string: str,
+    secret_name: str,
+    access_token: str | None = None,
+) -> None:
     fail_fast = _truthy_env("PBI_BENCH_METADATA_FAIL_FAST")
     min_rows = int(os.environ.get("PBI_BENCH_METADATA_MIN_ROWS", "1"))
     print_rows_enabled = _env_flag_default_on("PBI_BENCH_METADATA_PRINT_ROWS")
@@ -644,6 +711,7 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
                 con,
                 connection_string,
                 secret_name,
+                access_token,
                 profile_name,
                 profile_transport,
                 checks,
@@ -652,7 +720,9 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
                 display_sample_rows,
             )
             for function_name, result in profile_results.items():
-                per_function_results.setdefault(function_name, {})[profile_name] = result
+                per_function_results.setdefault(function_name, {})[profile_name] = (
+                    result
+                )
             log_timing(f"metadata profile {profile_name} total", profile_started_at)
     finally:
         if original_transport:
@@ -699,22 +769,26 @@ def _run_metadata_probes(con: object, connection_string: str, secret_name: str) 
         )
 
 
-def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: str) -> None:
+def run_with_python_duckdb(
+    connection_string: str, dax_query: str, secret_name: str
+) -> None:
     import duckdb  # noqa: PLC0415
+    from bench_duckdb_cli import _windows_runtime_path  # noqa: PLC0415
 
     script_started_at = perf_counter()
-    ext_escaped = str(extension_path).replace("'", "''")
+    ext_escaped = _sql_escape(str(extension_path))
+    runtime_path = _windows_runtime_path(REPO)
+    if runtime_path:
+        os.environ["PATH"] = runtime_path + os.pathsep + os.environ.get("PATH", "")
     mode = (
-        os.environ.get("PBI_BENCH_MODE", "materialize").strip().lower()
-        or "materialize"
+        os.environ.get("PBI_BENCH_MODE", "materialize").strip().lower() or "materialize"
     )
     iterations = int(os.environ.get("PBI_BENCH_ITERATIONS", "1"))
     transport = _default_xmla_transport()
-    metadata_cache_disabled = (
-        os.environ.get("PBI_SCANNER_DISABLE_METADATA_CACHE", "").strip().lower()
-        in {"1", "true", "yes", "on"}
+    metadata_cache_disabled = _truthy_env("PBI_SCANNER_DISABLE_METADATA_CACHE")
+    metadata_cache_dir = (
+        os.environ.get("PBI_SCANNER_CACHE_DIR", "").strip() or "default"
     )
-    metadata_cache_dir = os.environ.get("PBI_SCANNER_CACHE_DIR", "").strip() or "default"
     metadata_probe = _truthy_env("PBI_BENCH_METADATA_PROBE")
     print(
         f"[python] benchmark mode={mode} iterations={iterations} "
@@ -726,6 +800,19 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
     if os.environ.get("PBI_BENCH_DIRECT_XMLA", "").strip():
         connection_string = resolve_direct_xmla_connection_string(connection_string)
 
+    access_token = None
+    use_direct_token = os.name == "nt" and not _truthy_env(
+        "PBI_BENCH_USE_DUCKDB_AZURE_SECRET"
+    )
+    if use_direct_token:
+        step_started_at = perf_counter()
+        access_token = _az_access_token()
+        log_timing("Azure CLI access token", step_started_at)
+        print(
+            "[python] using direct Azure CLI access token auth "
+            "for Python DuckDB API on Windows"
+        )
+
     step_started_at = perf_counter()
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     log_timing("duckdb.connect", step_started_at)
@@ -734,36 +821,35 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
     con.sql(f"LOAD '{ext_escaped}'")
     log_timing("LOAD pbi_scanner", step_started_at)
 
-    step_started_at = perf_counter()
-    con.install_extension("azure")
-    log_timing("INSTALL azure", step_started_at)
+    if access_token is None:
+        step_started_at = perf_counter()
+        con.install_extension("azure")
+        log_timing("INSTALL azure", step_started_at)
 
-    step_started_at = perf_counter()
-    con.load_extension("azure")
-    log_timing("LOAD azure", step_started_at)
+        step_started_at = perf_counter()
+        con.load_extension("azure")
+        log_timing("LOAD azure", step_started_at)
 
-    step_started_at = perf_counter()
-    con.sql(
-        f"""
-        CREATE OR REPLACE SECRET {secret_name} (
-            TYPE azure,
-            PROVIDER credential_chain,
-            CHAIN 'cli'
-        )
-        """
-    )
-    log_timing(f"CREATE SECRET {secret_name}", step_started_at)
+        step_started_at = perf_counter()
+        con.sql(f"""
+            CREATE OR REPLACE SECRET {secret_name} (
+                TYPE azure,
+                PROVIDER credential_chain,
+                CHAIN 'cli'
+            )
+            """)
+        log_timing(f"CREATE SECRET {secret_name}", step_started_at)
 
     if metadata_probe:
         step_started_at = perf_counter()
-        _run_metadata_probes(con, connection_string, secret_name)
+        _run_metadata_probes(con, connection_string, secret_name, access_token)
         log_timing("metadata probe total", step_started_at)
 
     for iteration in range(1, iterations + 1):
         prefix = f"iteration {iteration}/{iterations} {mode}"
         step_started_at = perf_counter()
         relation = con.sql(
-            _dax_sql(connection_string, dax_query, secret_name, mode)
+            _dax_sql(connection_string, dax_query, secret_name, mode, access_token)
         )
         log_timing(f"{prefix} relation creation", step_started_at)
 
@@ -782,7 +868,9 @@ def run_with_python_duckdb(connection_string: str, dax_query: str, secret_name: 
     log_timing("script total", script_started_at)
 
 
-def run_with_bundled_cli(connection_string: str, dax_query: str, secret_name: str) -> None:
+def run_with_bundled_cli(
+    connection_string: str, dax_query: str, secret_name: str
+) -> None:
     from bench_duckdb_cli import (  # noqa: PLC0415
         materialize_and_summarize_sql,
         parse_count_star_then_sample_lines,
@@ -829,11 +917,13 @@ def main() -> None:
 
     from bench_duckdb_cli import python_duckdb_connect_usable  # noqa: PLC0415
 
-    if python_duckdb_connect_usable():
+    force_cli = _truthy_env("PBI_BENCH_USE_BUNDLED_CLI")
+    if python_duckdb_connect_usable() and not force_cli:
         run_with_python_duckdb(connection_string, dax_query, secret_name)
     else:
         print(
-            "[python] duckdb.connect not available; using bundled ./build/release/duckdb CLI",
+            "[python] using bundled DuckDB CLI "
+            "(duckdb.connect unavailable or PBI_BENCH_USE_BUNDLED_CLI enabled)",
             file=sys.stderr,
         )
         run_with_bundled_cli(connection_string, dax_query, secret_name)

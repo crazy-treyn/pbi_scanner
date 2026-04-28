@@ -2588,6 +2588,22 @@ static void ValidateXmlaContentType(const HttpResponse &response,
       static_cast<unsigned long long>(response.streamed_chunks));
 }
 
+static std::string XmlaHttpErrorDetail(const HttpResponse &response,
+                                       const XmlaStreamParser &parser) {
+  if (!parser.Excerpt().empty()) {
+    return parser.Excerpt();
+  }
+  if (!response.body.empty()) {
+    return response.body;
+  }
+  return response.reason;
+}
+
+static bool LooksLikePausedCapacityError(const std::string &detail) {
+  auto normalized = StringUtil::Lower(detail);
+  return normalized.find("error in xmla in dedicated") != std::string::npos;
+}
+
 static void ValidateHttpResponse(const HttpResponse &response,
                                  const XmlaStreamParser &parser,
                                  const std::string &operation,
@@ -2605,9 +2621,16 @@ static void ValidateHttpResponse(const HttpResponse &response,
                       response.request_error);
   }
   if (response.status >= 400) {
+    auto detail = XmlaHttpErrorDetail(response, parser);
+    if (response.status == 500 && LooksLikePausedCapacityError(detail)) {
+      throw IOException(
+          "%s http %d: Power BI/Fabric capacity appears to be paused or "
+          "unavailable. Resume the capacity that hosts this semantic model, "
+          "then retry the query. Original service message: %s",
+          operation, response.status, detail.c_str());
+    }
     throw IOException("%s http %d: %s", operation, response.status,
-                      parser.Excerpt().empty() ? response.reason
-                                               : parser.Excerpt());
+                      detail.c_str());
   }
 }
 

@@ -5,6 +5,7 @@ Shared helpers for local benchmarks using the bundled DuckDB CLI (build/release/
 Use this when the Python `duckdb` package is missing or `duckdb.connect` is unavailable.
 Not imported by the extension; local scripts only.
 """
+
 from __future__ import annotations
 
 import os
@@ -22,13 +23,52 @@ def escape_sql_literal(value: str) -> str:
 
 def require_release_artifacts(repo: Optional[Path] = None) -> tuple[Path, Path]:
     base = repo or REPO
-    ext = base / "build" / "release" / "extension" / "pbi_scanner" / "pbi_scanner.duckdb_extension"
+    ext = (
+        base
+        / "build"
+        / "release"
+        / "extension"
+        / "pbi_scanner"
+        / "pbi_scanner.duckdb_extension"
+    )
     cli = base / "build" / "release" / "duckdb"
+    if not cli.is_file() and os.name == "nt":
+        cli = cli.with_suffix(".exe")
     if not ext.is_file():
-        raise FileNotFoundError(f"Missing extension at {ext}; run `make release` first.")
+        raise FileNotFoundError(
+            f"Missing extension at {ext}; run `make release` first."
+        )
     if not cli.is_file():
-        raise FileNotFoundError(f"Missing DuckDB CLI at {cli}; run `make release` first.")
+        raise FileNotFoundError(
+            f"Missing DuckDB CLI at {cli}; run `make release` first."
+        )
     return ext, cli
+
+
+def _cmake_cache_value(repo: Path, key: str) -> Optional[str]:
+    cache = repo / "build" / "release" / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    prefix = f"{key}:"
+    for line in cache.read_text().splitlines():
+        if not line.startswith(prefix) or "=" not in line:
+            continue
+        return line.split("=", 1)[1].strip() or None
+    return None
+
+
+def _windows_runtime_path(repo: Path) -> str:
+    if os.name != "nt":
+        return ""
+    candidates: list[Path] = []
+    openssl_root = _cmake_cache_value(repo, "OPENSSL_ROOT_DIR")
+    if openssl_root:
+        candidates.append(Path(openssl_root) / "bin")
+    conda_prefix = os.environ.get("CONDA_PREFIX", "").strip()
+    if conda_prefix:
+        candidates.append(Path(conda_prefix) / "Library" / "bin")
+    existing = [str(path) for path in candidates if path.is_dir()]
+    return os.pathsep.join(existing)
 
 
 def python_duckdb_connect_usable() -> bool:
@@ -44,7 +84,8 @@ def live_session_sql(extension_path: Path, secret_name: str) -> str:
     sn = secret_name.strip()
     load = f"LOAD '{escape_sql_literal(str(extension_path))}'"
     secret = (
-        f"CREATE OR REPLACE SECRET {sn} ( TYPE azure, PROVIDER credential_chain, CHAIN 'cli' )"
+        f"CREATE OR REPLACE SECRET {sn} "
+        "( TYPE azure, PROVIDER credential_chain, CHAIN 'cli' )"
     )
     return "; ".join([load, "INSTALL azure", "LOAD azure", secret])
 
@@ -60,7 +101,10 @@ def one_shot_count_sql(
     extension_path: Path, secret_name: str, connection_string: str, dax: str
 ) -> str:
     return "; ".join(
-        [live_session_sql(extension_path, secret_name), dax_count_sql(connection_string, dax, secret_name)]
+        [
+            live_session_sql(extension_path, secret_name),
+            dax_count_sql(connection_string, dax, secret_name),
+        ]
     )
 
 
@@ -98,6 +142,9 @@ def run_duckdb_cli(
     merged = os.environ.copy()
     if env:
         merged.update({k: v for k, v in env.items() if v is not None})
+    runtime_path = _windows_runtime_path(repo)
+    if runtime_path:
+        merged["PATH"] = runtime_path + os.pathsep + merged.get("PATH", "")
     proc = subprocess.run(
         [str(cli), "-unsigned", "-csv", "-c", sql],
         cwd=str(repo),
@@ -138,7 +185,7 @@ def parse_count_star_then_sample_lines(stdout: str) -> tuple[int, list[str]]:
     if not lines:
         raise ValueError("empty stdout from DuckDB")
     idx = 0
-    while idx < len(lines) and not lines[idx].strip():
+    while idx < len(lines) and lines[idx].strip() != "count_star()":
         idx += 1
     if idx >= len(lines) or lines[idx].strip() != "count_star()":
         raise ValueError("expected count_star() header in DuckDB CSV output")
