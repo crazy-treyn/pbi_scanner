@@ -3,10 +3,24 @@
 ## Scope
 
 - This repository builds a DuckDB C++ extension named `pbi_scanner`.
+- `pbi_scanner` queries Power BI Semantic Models through DAX/XMLA and exposes DuckDB table functions for data and metadata access.
 - The extension code you will usually edit lives in `src/`, `src/include/`, and `test/sql/`.
 - `duckdb/` is a pinned submodule and `extension-ci-tools/` provides shared build logic.
 - Treat `duckdb/` and `extension-ci-tools/` as upstream or vendored unless the task explicitly asks you to change them.
 - The primary workflows are extension build, DuckDB sqllogictest execution, formatting, and clang-tidy checks.
+- The current stable build target is DuckDB 1.5.2. The CI workflow also has a DuckDB `main` forward-compatibility job.
+
+## High-Level Architecture
+
+- `src/pbi_scanner_extension.cpp`: extension load path and SQL function registration.
+- `src/dax_query.cpp`: DuckDB table-function binding/execution for DAX query results.
+- `src/auth.cpp`: Azure CLI, access-token, service-principal, and DuckDB secret auth plumbing.
+- `src/connection_string.cpp`: Power BI/XMLA connection string parsing.
+- `src/powerbi_resolver.cpp`: Power BI locator resolution to concrete XMLA endpoints.
+- `src/http_client.cpp`: native HTTP transport wrappers.
+- `src/xmla.cpp`: XMLA request/response handling, schema probes, XML/binary parsing, transport diagnostics, and metadata cache logic.
+- `src/include/`: shared extension headers.
+- `test/sql/`: deterministic offline sqllogictests; do not add live Power BI requirements here.
 
 ## Repo Layout
 
@@ -47,6 +61,57 @@
 - `GEN=ninja make`: uses Ninja instead of the default generator.
 - `CMAKE_BUILD_PARALLEL_LEVEL=4 GEN=ninja make`: bounded parallel Ninja build.
 - `make clean`: removes local build outputs.
+
+## DuckDB Version Bump Workflow
+
+- Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
+- For a stable/current bump, update `duckdb/` to the target DuckDB release tag and `extension-ci-tools/` to the matching release branch or commit.
+- For DuckDB 1.5.2 specifically, the verified refs are:
+	- `duckdb` tag `v1.5.2` at `8a5851971fae891f292c2714d86046ee018e9737`.
+	- `extension-ci-tools` branch `v1.5.2` at `ec20f45aabeb9fcfcfa044dda249597f066d4826`.
+- Update `.github/workflows/MainDistributionPipeline.yml` stable build and code-quality jobs so the reusable workflow ref, `duckdb_version`, and `ci_tools_version` all match the new stable release.
+- If `pyproject.toml` pins Python `duckdb` for local helper/benchmark tooling, bump it to the same release and regenerate `uv.lock` with `uv lock`.
+- Update `README.md` when the supported/current DuckDB release changes or when community publication instructions change.
+- Prefer a clean/reconfigured build after submodule bumps because generated `build/` state may still contain paths or settings from the previous DuckDB release.
+- Verify the bump before treating the commit as publishable:
+	- `git -C duckdb describe --tags --exact-match`
+	- `git -C duckdb rev-parse HEAD`
+	- `git -C extension-ci-tools rev-parse HEAD`
+	- release build
+	- focused sqllogictest
+	- format and tidy checks
+
+## Forward Compatibility Testing
+
+- Keep the stable CI job pinned to the latest validated DuckDB release.
+- Add or maintain a separate `duckdb-next-build` job that uses DuckDB and extension-ci-tools `main`:
+	- `uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main`
+	- `duckdb_version: main`
+	- `ci_tools_version: main`
+	- `extension_name: pbi_scanner`
+	- same `exclude_archs` as stable CI unless support intentionally differs.
+- Treat `duckdb-next-build` as an early warning for upcoming DuckDB API/build changes. It is not the current release artifact.
+- If stable passes but `main` fails near a DuckDB release, create a compatibility branch for the upcoming release and use `repo.ref_next` in the DuckDB Community Extensions descriptor.
+- Once the new DuckDB release is out and validated, update the normal stable refs and community `repo.ref`; do not keep `repo.ref_next` as the current release pointer.
+
+## Community Extension Publication
+
+- DuckDB community publication is done through a descriptor PR to `duckdb/community-extensions`; do not copy built binaries into this repo.
+- Add `extensions/pbi_scanner/description.yml` in the community repository. The directory name must match `extension.name` exactly.
+- Use a pushed, validated commit SHA for `repo.ref`. Do not point `repo.ref` at a dirty local state, an unpushed branch, or an unvalidated commit.
+- For the current DuckDB 1.5.2 release, `repo.ref` should point at the commit that contains the 1.5.2 submodule bump, CI pin bump, local tooling bump if applicable, docs updates, and passing validation.
+- Descriptor fields to keep aligned with this repo:
+	- `extension.name: pbi_scanner`
+	- `extension.description: DuckDB extension for querying Power BI Semantic Models with DAX.`
+	- `extension.language: C++`
+	- `extension.build: cmake`
+	- `extension.license: MIT`
+	- `extension.maintainers`: confirm final GitHub handle(s) before publishing.
+	- `extension.excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"`
+	- `repo.github: crazy-treyn/pbi_scanner`
+	- `repo.ref`: validated current release commit SHA.
+- Use `repo.ref_next` only for future-release compatibility when DuckDB `main` needs a different commit than latest stable.
+- Include validation evidence in the community PR description: stable CI, next CI if available, local build/test commands, and known platform exclusions.
 
 ## Test Commands
 

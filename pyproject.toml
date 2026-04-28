@@ -13,7 +13,7 @@ dependencies = []
 
 [dependency-groups]
 bench = [
-	"duckdb==1.5.1",
+	"duckdb==1.5.2",
 	"pyarrow",
 	"polars"
 ]

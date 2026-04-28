@@ -28,11 +28,11 @@ optional generic alternative (`--live` + PBI_BENCH_*): it uses the bundled
 
 Optional: PBI_BENCH_SECRET_NAME (default pbi_cli), PBI_BENCH_ITERATIONS (default 2).
 """
+
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 from time import perf_counter
@@ -45,15 +45,6 @@ from bench_duckdb_cli import (
 )
 
 REPO = Path(__file__).resolve().parent
-EXTENSION = (
-    REPO
-    / "build"
-    / "release"
-    / "extension"
-    / "pbi_scanner"
-    / "pbi_scanner.duckdb_extension"
-)
-DUCKDB_CLI = REPO / "build" / "release" / "duckdb"
 
 PARSE_SQL = r"""
 SELECT __pbi_scanner_test_parse_chunked_double(
@@ -63,28 +54,37 @@ SELECT __pbi_scanner_test_parse_chunked_double(
 """.strip()
 
 
-def extension_sql_path() -> str:
-    return str(EXTENSION).replace("'", "''")
+def extension_sql_path(extension_path: Path) -> str:
+    return str(extension_path).replace("'", "''")
 
 
 def run_smoke() -> None:
-    if not EXTENSION.is_file():
-        print(f"Missing extension at {EXTENSION}; run `make release` first.", file=sys.stderr)
-        sys.exit(1)
-    if not DUCKDB_CLI.is_file():
-        print(f"Missing shell at {DUCKDB_CLI}; run `make release` first.", file=sys.stderr)
+    try:
+        ext_path, _ = require_release_artifacts(REPO)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    load = extension_sql_path()
+    load = extension_sql_path(ext_path)
     sql = f"LOAD '{load}'; " + PARSE_SQL
     t0 = perf_counter()
-    subprocess.run(
-        [str(DUCKDB_CLI), "-unsigned", "-csv", "-c", sql],
-        cwd=str(REPO),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    proc = run_duckdb_cli(REPO, sql, forward_pbi_timings=False)
+    if proc.returncode != 0:
+        if proc.stderr:
+            print(
+                proc.stderr,
+                end="" if proc.stderr.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
+        if proc.stdout:
+            print(
+                proc.stdout,
+                end="" if proc.stdout.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
+        if not proc.stderr and not proc.stdout:
+            print("(no output)", file=sys.stderr)
+        sys.exit(proc.returncode or 1)
     elapsed = perf_counter() - t0
     print(f"[smoke] parse_chunked_double ok in {elapsed * 1000:.1f} ms")
 
@@ -114,9 +114,17 @@ def run_live() -> None:
     warm = run_duckdb_cli(REPO, bench_sql, env=bench_env)
     if warm.returncode != 0:
         if warm.stderr:
-            print(warm.stderr, end="" if warm.stderr.endswith("\n") else "\n", file=sys.stderr)
+            print(
+                warm.stderr,
+                end="" if warm.stderr.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
         if warm.stdout:
-            print(warm.stdout, end="" if warm.stdout.endswith("\n") else "\n", file=sys.stderr)
+            print(
+                warm.stdout,
+                end="" if warm.stdout.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
         if not warm.stderr and not warm.stdout:
             print("(no output)", file=sys.stderr)
         sys.exit(warm.returncode or 1)
@@ -133,9 +141,17 @@ def run_live() -> None:
         elapsed = perf_counter() - t0
         if proc.returncode != 0:
             if proc.stderr:
-                print(proc.stderr, end="" if proc.stderr.endswith("\n") else "\n", file=sys.stderr)
+                print(
+                    proc.stderr,
+                    end="" if proc.stderr.endswith("\n") else "\n",
+                    file=sys.stderr,
+                )
             if proc.stdout:
-                print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n", file=sys.stderr)
+                print(
+                    proc.stdout,
+                    end="" if proc.stdout.endswith("\n") else "\n",
+                    file=sys.stderr,
+                )
             if not proc.stderr and not proc.stdout:
                 print("(no output)", file=sys.stderr)
             sys.exit(proc.returncode or 1)
