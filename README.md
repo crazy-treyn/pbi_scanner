@@ -20,7 +20,7 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 
 - DuckDB extension toolchain requirements (CMake, C++ build toolchain, OpenSSL)
 - Git with submodule support
-- Optional: Azure CLI for `auth_mode := 'azure_cli'`
+- Azure CLI login for the credential-chain examples (`az login`)
 
 ### Step 1: Clone and Build
 
@@ -48,13 +48,23 @@ The bundled shell already has `pbi_scanner` linked in.
 ### Step 3: Run a First Query
 
 ```sql
+INSTALL azure;
+LOAD azure;
+
+CREATE SECRET pbi_cli (
+    TYPE azure,
+    PROVIDER credential_chain,
+    CHAIN 'cli'
+);
+
 SELECT *
 FROM dax_query(
-    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
-    'EVALUATE ROW("probe_ok", 1)',
-    auth_mode := 'azure_cli'
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
+    'EVALUATE ROW("probe_ok", 1)'
 );
 ```
+
+Replace the workspace and semantic model placeholders with values you can access.
 
 ## Connection Configuration
 
@@ -81,6 +91,8 @@ Use the direct XMLA form when you already have a resolved target and want to byp
 - `auth_mode := 'azure_cli'`
 - `auth_mode := 'access_token'`
 - `auth_mode := 'service_principal'`
+
+For interactive SQL sessions, the recommended path is DuckDB secret-based auth with DuckDB's Azure extension.
 
 ### DuckDB Secret-Based Auth
 
@@ -123,10 +135,10 @@ FROM dax_query(
 Use these helper functions to inspect semantic model structure:
 
 ```sql
-SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
-SELECT * FROM pbi_columns('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
-SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
-SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
+SELECT * FROM pbi_columns('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
+SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
+SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
 ```
 
 ## Query Execution
@@ -138,9 +150,8 @@ SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myor
 ```sql
 SELECT *
 FROM dax_query(
-    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
-    'EVALUATE TOPN(10, VALUES(''DimDate''[Calendar Year]))',
-    auth_mode := 'azure_cli'
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
+    'EVALUATE TOPN(10, VALUES(''DimDate''[Calendar Year]))'
 );
 ```
 
