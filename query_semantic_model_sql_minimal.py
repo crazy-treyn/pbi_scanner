@@ -109,7 +109,9 @@ def _result_sql(connection_string: str, dax: str, secret_name: str) -> str:
     return f"SELECT * FROM {source} LIMIT {_sample_limit()}"
 
 
-def _build_sql(extension_path: Path, connection_string: str, dax: str, secret_name: str) -> str:
+def _build_sql(
+    extension_path: Path, connection_string: str, dax: str, secret_name: str
+) -> str:
     statements = [f"LOAD '{escape_sql_literal(str(extension_path))}'"]
     if _truthy_env("PBI_SQL_INSTALL_AZURE", "1"):
         statements.append("INSTALL azure")

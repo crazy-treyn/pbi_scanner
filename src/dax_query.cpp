@@ -381,8 +381,7 @@ static bool EnsureCacheDirectory(const string &cache_dir) {
   for (idx_t i = root_length; i < cache_dir.size(); i++) {
     if (IsPathSeparator(cache_dir[i])) {
       auto current = cache_dir.substr(0, i);
-      if (current.size() > root_length &&
-          !CreateDirectoryIfMissing(current)) {
+      if (current.size() > root_length && !CreateDirectoryIfMissing(current)) {
         return false;
       }
     }

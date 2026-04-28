@@ -2599,7 +2599,8 @@ private:
     if (local_id != 0) {
       name.local_name = DecodeXMLName(ExtractLocalName(LookupString(local_id)));
     } else if (prefix_id != 0) {
-      name.local_name = DecodeXMLName(ExtractLocalName(LookupString(prefix_id)));
+      name.local_name =
+          DecodeXMLName(ExtractLocalName(LookupString(prefix_id)));
     }
     if (uri_id != 0) {
       name.uri = LookupString(uri_id);
@@ -3260,10 +3261,9 @@ static bool DecodeBufferedXmlaResponse(
     if (known_columns && on_row &&
         TryParseSsasRowsFast(decompressed, *known_columns, *on_row,
                              stop_callback)) {
-      DebugTiming((std::string("SX_XPRESS ") + operation_label +
-                   " fast parse")
-                      .c_str(),
-                  parse_start);
+      DebugTiming(
+          (std::string("SX_XPRESS ") + operation_label + " fast parse").c_str(),
+          parse_start);
       return true;
     }
     ParseBinXmlResponse(decompressed, parser);
@@ -3536,8 +3536,7 @@ std::vector<XmlaColumn> XmlaExecutor::ProbeSchema(const XmlaRequest &request) {
 }
 
 void XmlaExecutor::ExecuteStreaming(
-    const XmlaRequest &request,
-    const std::vector<XmlaColumn> *known_columns,
+    const XmlaRequest &request, const std::vector<XmlaColumn> *known_columns,
     const std::function<void(const std::vector<XmlaColumn> &columns)>
         &on_schema,
     const std::function<bool(const std::vector<Value> &row)> &on_row,
@@ -3565,10 +3564,9 @@ void XmlaExecutor::ExecuteStreaming(
       true);
   bool decoded_response = false;
   if (buffer_response && !(should_stop && should_stop())) {
-    decoded_response = DecodeBufferedXmlaResponse(response, buffered_response,
-                                                  parser, "execution",
-                                                  known_columns, &on_row,
-                                                  &should_stop);
+    decoded_response = DecodeBufferedXmlaResponse(
+        response, buffered_response, parser, "execution", known_columns,
+        &on_row, &should_stop);
   }
   parser.Finish();
   if (should_stop && should_stop() && response.HasRequestError()) {
