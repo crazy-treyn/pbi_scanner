@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <condition_variable>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -103,6 +104,32 @@ template <class T> static T *GetFlatVectorDataMutable(Vector &vector) {
 static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
                                   const Value &value,
                                   const LogicalType &target_type) {
+  auto try_convert_double_to_date = [](double serial_value,
+                                       date_t &out_date) -> bool {
+    if (!std::isfinite(serial_value)) {
+      return false;
+    }
+    static constexpr int64_t MICROS_PER_DAY = 24LL * 60LL * 60LL * 1000000LL;
+    static const int32_t OLE_BASE_EPOCH_DAYS =
+        Date::EpochDays(Date::FromString("1899-12-30", true));
+    auto total_micros = static_cast<int64_t>(
+        serial_value * static_cast<double>(MICROS_PER_DAY) +
+        (serial_value >= 0 ? 0.5 : -0.5));
+    auto day_delta = total_micros / MICROS_PER_DAY;
+    auto micros_in_day = total_micros % MICROS_PER_DAY;
+    if (micros_in_day < 0) {
+      micros_in_day += MICROS_PER_DAY;
+      day_delta--;
+    }
+    auto date_days = static_cast<int64_t>(OLE_BASE_EPOCH_DAYS) + day_delta;
+    if (date_days < NumericLimits<int32_t>::Minimum() ||
+        date_days > NumericLimits<int32_t>::Maximum()) {
+      return false;
+    }
+    out_date = Date::EpochDaysToDate(static_cast<int32_t>(date_days));
+    return true;
+  };
+
   if (value.IsNull()) {
     FlatVector::SetNull(vector, row_idx, true);
     return true;
@@ -143,6 +170,14 @@ static bool TrySetFlatVectorValue(Vector &vector, idx_t row_idx,
       GetFlatVectorDataMutable<date_t>(vector)[row_idx] =
           value.GetValueUnsafe<date_t>();
       return true;
+    }
+    if (value_type == LogicalTypeId::DOUBLE) {
+      date_t converted_date;
+      if (try_convert_double_to_date(value.GetValueUnsafe<double>(),
+                                     converted_date)) {
+        GetFlatVectorDataMutable<date_t>(vector)[row_idx] = converted_date;
+        return true;
+      }
     }
     break;
   case LogicalTypeId::TIME:

@@ -98,6 +98,56 @@ SELECT __pbi_scanner_test_coerce_xml_text('', 'INFER');
 <NULL>
 
 query T
+SELECT __pbi_scanner_test_coerce_xml_text('1', 'DATE');
+----
+1899-12-31
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('0.5', 'TIME');
+----
+12:00:00
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('2.5', 'TIMESTAMP');
+----
+1900-01-01 12:00:00
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_type('9223372036854775807', 'BIGINT');
+----
+BIGINT
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_type('1234.5678', 'DOUBLE');
+----
+DOUBLE
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_type('true', 'BOOLEAN');
+----
+BOOLEAN
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('0', 'DATE');
+----
+1899-12-30
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('-1', 'DATE');
+----
+1899-12-29
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('0.9999999', 'TIME');
+----
+23:59:59.99136
+
+query T
+SELECT __pbi_scanner_test_coerce_xml_text('45292.25', 'TIMESTAMP');
+----
+2024-01-01 06:00:00
+
+query T
 SELECT __pbi_scanner_test_effective_execution_transport(
     'EVALUATE INFO.VIEW.TABLES()'
 );

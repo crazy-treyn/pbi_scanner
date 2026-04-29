@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -475,6 +476,36 @@ static bool TryParseTimestampValue(const std::string &value, Value &result) {
   }
 }
 
+static bool TryDecodeSsasTemporalSerial(double serial_value, date_t &out_date,
+                                        dtime_t &out_time) {
+  if (!std::isfinite(serial_value)) {
+    return false;
+  }
+  // SSAS commonly uses OLE Automation serial date semantics:
+  // days since 1899-12-30, including fractional day for time.
+  static constexpr int64_t MICROS_PER_DAY = 24LL * 60LL * 60LL * 1000000LL;
+  static const int32_t OLE_BASE_EPOCH_DAYS =
+      Date::EpochDays(Date::FromString("1899-12-30", true));
+
+  auto total_micros =
+      static_cast<int64_t>(serial_value * static_cast<double>(MICROS_PER_DAY) +
+                           (serial_value >= 0 ? 0.5 : -0.5));
+  auto day_delta = total_micros / MICROS_PER_DAY;
+  auto micros_in_day = total_micros % MICROS_PER_DAY;
+  if (micros_in_day < 0) {
+    micros_in_day += MICROS_PER_DAY;
+    day_delta--;
+  }
+  auto date_days = static_cast<int64_t>(OLE_BASE_EPOCH_DAYS) + day_delta;
+  if (date_days < NumericLimits<int32_t>::Minimum() ||
+      date_days > NumericLimits<int32_t>::Maximum()) {
+    return false;
+  }
+  out_date = Date::EpochDaysToDate(static_cast<int32_t>(date_days));
+  out_time = dtime_t(micros_in_day);
+  return true;
+}
+
 static bool TryParseTimeFromBaseDateTimestamp(const std::string &value,
                                               Value &result) {
   if (HasTimezoneOffset(value)) {
@@ -676,6 +707,31 @@ static Value CoerceXmlValue(const std::string &raw_value,
     double parsed = 0;
     if (TryParseDouble(body, parsed)) {
       return Value::DOUBLE(parsed);
+    }
+  }
+
+  if (coercion_kind == XmlaCoercionKind::DATE ||
+      coercion_kind == XmlaCoercionKind::TIME ||
+      coercion_kind == XmlaCoercionKind::TIMESTAMP ||
+      coercion_kind == XmlaCoercionKind::TIMESTAMP_TZ) {
+    double serial_value = 0;
+    if (TryParseDouble(body, serial_value)) {
+      date_t parsed_date;
+      dtime_t parsed_time;
+      if (TryDecodeSsasTemporalSerial(serial_value, parsed_date, parsed_time)) {
+        if (coercion_kind == XmlaCoercionKind::DATE) {
+          return Value::DATE(parsed_date);
+        }
+        if (coercion_kind == XmlaCoercionKind::TIME) {
+          return Value::TIME(parsed_time);
+        }
+        auto parsed_timestamp =
+            Timestamp::FromDatetime(parsed_date, parsed_time);
+        if (coercion_kind == XmlaCoercionKind::TIMESTAMP_TZ) {
+          return Value::TIMESTAMPTZ(timestamp_tz_t(parsed_timestamp));
+        }
+        return Value::TIMESTAMP(parsed_timestamp);
+      }
     }
   }
 
@@ -918,9 +974,17 @@ public:
   XmlaStreamParser(
       bool stop_after_schema_p,
       std::function<void(const std::vector<XmlaColumn> &columns)> on_schema_p,
-      std::function<bool(const std::vector<Value> &row)> on_row_p)
+      std::function<bool(const std::vector<Value> &row)> on_row_p,
+      const std::vector<XmlaColumn> *known_columns_p = nullptr)
       : stop_after_schema(stop_after_schema_p),
-        on_schema(std::move(on_schema_p)), on_row(std::move(on_row_p)) {}
+        on_schema(std::move(on_schema_p)), on_row(std::move(on_row_p)) {
+    if (known_columns_p) {
+      for (const auto &column : *known_columns_p) {
+        known_column_types[column.name] = column.duckdb_type;
+        known_column_types_by_index.push_back(column.duckdb_type);
+      }
+    }
+  }
 
   bool StartElement(std::string name,
                     case_insensitive_map_t<std::string> attributes) {
@@ -1221,6 +1285,22 @@ private:
       column.source_type = GetAttribute(frame.attributes, "type");
       column.duckdb_type = MapXmlTypeToLogicalType(column.source_type);
       column.coercion_kind = CoercionKindFromXmlType(column.source_type);
+      auto known_position = columns.size();
+      if (known_position < known_column_types_by_index.size()) {
+        column.duckdb_type = known_column_types_by_index[known_position];
+        column.coercion_kind = CoercionKindFromLogicalType(column.duckdb_type);
+      } else {
+        auto known_column = known_column_types.find(column.name);
+        if (known_column != known_column_types.end()) {
+          column.duckdb_type = known_column->second;
+          column.coercion_kind =
+              CoercionKindFromLogicalType(column.duckdb_type);
+        }
+      }
+      if (column.name.empty()) {
+        column.name = "column_" + std::to_string(columns.size());
+        column.coercion_kind = CoercionKindFromLogicalType(column.duckdb_type);
+      }
       auto nillable = GetAttribute(frame.attributes, "nillable");
       auto min_occurs = GetAttribute(frame.attributes, "minOccurs");
       if (StringUtil::CIEquals(nillable, "true")) {
@@ -1343,6 +1423,8 @@ private:
   std::vector<XmlFrame> stack;
   std::vector<XmlaColumn> columns;
   case_insensitive_map_t<idx_t> column_indexes;
+  case_insensitive_map_t<LogicalType> known_column_types;
+  std::vector<LogicalType> known_column_types_by_index;
   std::vector<std::pair<std::string, Value>> current_row;
   std::vector<Value> current_row_dense;
   std::function<void(const std::vector<XmlaColumn> &columns)> on_schema;
@@ -1569,6 +1651,23 @@ private:
     std::ostringstream stream;
     stream << std::setprecision(17) << value;
     return stream.str();
+  }
+
+  std::string ReadSqlDateTimeValueText() {
+    static constexpr int64_t MICROS_PER_DAY = 24LL * 60LL * 60LL * 1000000LL;
+    static const int32_t SQL_DATETIME_BASE_EPOCH_DAYS =
+        Date::EpochDays(Date::FromDate(1900, 1, 1));
+    auto day_part = static_cast<int32_t>(ReadUInt32());
+    auto tick_part = ReadUInt32();
+    auto total_micros = static_cast<int64_t>(tick_part) * 1000000LL;
+    auto micros = (total_micros + 150) / 300;
+    auto day_adjust = micros / MICROS_PER_DAY;
+    micros %= MICROS_PER_DAY;
+    auto epoch_days = static_cast<int64_t>(SQL_DATETIME_BASE_EPOCH_DAYS) +
+                      static_cast<int64_t>(day_part) + day_adjust;
+    auto date_value = Date::EpochDaysToDate(static_cast<int32_t>(epoch_days));
+    auto timestamp = Timestamp::FromDatetime(date_value, dtime_t(micros));
+    return Timestamp::ToString(timestamp);
   }
 
   std::string ReadScalarValue(uint8_t type, idx_t byte_length, bool &is_null) {
@@ -2002,6 +2101,16 @@ private:
     return result;
   }
 
+  uint32_t ReadUInt32() {
+    Ensure(4);
+    auto result = static_cast<uint32_t>(data[offset]) |
+                  (static_cast<uint32_t>(data[offset + 1]) << 8) |
+                  (static_cast<uint32_t>(data[offset + 2]) << 16) |
+                  (static_cast<uint32_t>(data[offset + 3]) << 24);
+    offset += 4;
+    return result;
+  }
+
   double ReadDouble() {
     auto raw = ReadUInt64();
     double value;
@@ -2031,6 +2140,23 @@ private:
     std::ostringstream stream;
     stream << std::setprecision(17) << value;
     return stream.str();
+  }
+
+  std::string ReadSqlDateTimeValueText() {
+    static constexpr int64_t MICROS_PER_DAY = 24LL * 60LL * 60LL * 1000000LL;
+    static const int32_t SQL_DATETIME_BASE_EPOCH_DAYS =
+        Date::EpochDays(Date::FromDate(1900, 1, 1));
+    auto day_part = static_cast<int32_t>(ReadUInt32());
+    auto tick_part = ReadUInt32();
+    auto total_micros = static_cast<int64_t>(tick_part) * 1000000LL;
+    auto micros = (total_micros + 150) / 300;
+    auto day_adjust = micros / MICROS_PER_DAY;
+    micros %= MICROS_PER_DAY;
+    auto epoch_days = static_cast<int64_t>(SQL_DATETIME_BASE_EPOCH_DAYS) +
+                      static_cast<int64_t>(day_part) + day_adjust;
+    auto date_value = Date::EpochDaysToDate(static_cast<int32_t>(epoch_days));
+    auto timestamp = Timestamp::FromDatetime(date_value, dtime_t(micros));
+    return Timestamp::ToString(timestamp);
   }
 
   std::string ReadUtf16String(idx_t code_units, bool consume_null) {
@@ -2146,6 +2272,64 @@ private:
     return ReadUtf16String(length, false);
   }
 
+  bool IsLikelyRecordToken(uint8_t token) const {
+    switch (token) {
+    case 0x00:
+    case 0x01:
+    case 0x04:
+    case 0x08:
+    case 0x0E:
+    case 0x10:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1:
+    case 0xEF:
+    case 0xF0:
+    case 0xF8:
+    case 0xF9:
+    case 0xFA:
+    case 0xFB:
+    case 0xFD:
+    case 0xFE:
+    case 0xFF:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  bool IsLikelyUtf16FramedTokenValue() const {
+    static constexpr uint32_t MAX_INLINE_UTF16_CODE_UNITS = 4096;
+    uint32_t maybe_length = 0;
+    idx_t next_offset = offset;
+    if (!TryReadVarUIntAt(data, size, offset, maybe_length, next_offset)) {
+      return false;
+    }
+    if (maybe_length > MAX_INLINE_UTF16_CODE_UNITS) {
+      return false;
+    }
+    auto payload_end = next_offset + static_cast<idx_t>(maybe_length) * 2;
+    if (payload_end > size) {
+      return false;
+    }
+    if (payload_end == size) {
+      return true;
+    }
+    return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
+  }
+
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
     case 0x04:
@@ -2157,7 +2341,7 @@ private:
     case 0x11:
       return ReadInlineUtf16Value();
     case 0x12:
-      return std::to_string(static_cast<int8_t>(ReadByte()));
+      return ReadSqlDateTimeValueText();
     case 0x13: {
       Ensure(2);
       auto value = static_cast<int16_t>(data[offset] | (data[offset + 1] << 8));
@@ -2176,6 +2360,15 @@ private:
     }
     case 0x15:
       return FormatDouble(ReadDouble());
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1: {
+      if (IsLikelyUtf16FramedTokenValue()) {
+        return ReadInlineUtf16Value();
+      }
+      return FormatDouble(ReadDouble());
+    }
     case 0x18:
       return std::to_string(ReadByte());
     case 0x19: {
@@ -2273,6 +2466,10 @@ private:
     case 0x13:
     case 0x14:
     case 0x15:
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1:
     case 0x18:
     case 0x19:
     case 0x1A:
@@ -2493,6 +2690,23 @@ private:
     return stream.str();
   }
 
+  std::string ReadSqlDateTimeValueText() {
+    static constexpr int64_t MICROS_PER_DAY = 24LL * 60LL * 60LL * 1000000LL;
+    static const int32_t SQL_DATETIME_BASE_EPOCH_DAYS =
+        Date::EpochDays(Date::FromDate(1900, 1, 1));
+    auto day_part = static_cast<int32_t>(ReadUInt32());
+    auto tick_part = ReadUInt32();
+    auto total_micros = static_cast<int64_t>(tick_part) * 1000000LL;
+    auto micros = (total_micros + 150) / 300;
+    auto day_adjust = micros / MICROS_PER_DAY;
+    micros %= MICROS_PER_DAY;
+    auto epoch_days = static_cast<int64_t>(SQL_DATETIME_BASE_EPOCH_DAYS) +
+                      static_cast<int64_t>(day_part) + day_adjust;
+    auto date_value = Date::EpochDaysToDate(static_cast<int32_t>(epoch_days));
+    auto timestamp = Timestamp::FromDatetime(date_value, dtime_t(micros));
+    return Timestamp::ToString(timestamp);
+  }
+
   std::string ReadUtf16String(idx_t code_units, bool consume_null) {
     Ensure(code_units * 2);
     std::string result;
@@ -2701,6 +2915,64 @@ private:
     return ReadUtf16String(length, false);
   }
 
+  bool IsLikelyRecordToken(uint8_t token) const {
+    switch (token) {
+    case 0x00:
+    case 0x01:
+    case 0x04:
+    case 0x08:
+    case 0x0E:
+    case 0x10:
+    case 0x11:
+    case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1B:
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1:
+    case 0xEF:
+    case 0xF0:
+    case 0xF8:
+    case 0xF9:
+    case 0xFA:
+    case 0xFB:
+    case 0xFD:
+    case 0xFE:
+    case 0xFF:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  bool IsLikelyUtf16FramedTokenValue() const {
+    static constexpr uint32_t MAX_INLINE_UTF16_CODE_UNITS = 4096;
+    uint32_t maybe_length = 0;
+    idx_t next_offset = offset;
+    if (!TryReadVarUIntAt(data, size, offset, maybe_length, next_offset)) {
+      return false;
+    }
+    if (maybe_length > MAX_INLINE_UTF16_CODE_UNITS) {
+      return false;
+    }
+    auto payload_end = next_offset + static_cast<idx_t>(maybe_length) * 2;
+    if (payload_end > size) {
+      return false;
+    }
+    if (payload_end == size) {
+      return true;
+    }
+    return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
+  }
+
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
     case 0x04:
@@ -2712,13 +2984,22 @@ private:
     case 0x11:
       return ReadInlineUtf16Value();
     case 0x12:
-      return std::to_string(static_cast<int8_t>(ReadByte()));
+      return ReadSqlDateTimeValueText();
     case 0x13:
       return std::to_string(static_cast<int16_t>(ReadUInt16()));
     case 0x14:
       return std::to_string(static_cast<int32_t>(ReadUInt32()));
     case 0x15:
       return FormatDouble(ReadDouble());
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1: {
+      if (IsLikelyUtf16FramedTokenValue()) {
+        return ReadInlineUtf16Value();
+      }
+      return FormatDouble(ReadDouble());
+    }
     case 0x18:
       return std::to_string(ReadByte());
     case 0x19:
@@ -2754,6 +3035,20 @@ private:
       }
       return ValueFromText(FormatDouble(value), coercion_kind);
     }
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1: {
+      if (IsLikelyUtf16FramedTokenValue()) {
+        return ValueFromText(ReadInlineUtf16Value(), coercion_kind);
+      }
+      auto numeric_value = ReadDouble();
+      if (coercion_kind == XmlaCoercionKind::DOUBLE ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::DOUBLE(numeric_value);
+      }
+      return ValueFromText(FormatDouble(numeric_value), coercion_kind);
+    }
     case 0x08: {
       auto value = static_cast<int64_t>(ReadUInt64());
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
@@ -2766,15 +3061,8 @@ private:
       return ValueFromText(std::to_string(value), coercion_kind);
     }
     case 0x12: {
-      auto value = static_cast<int8_t>(ReadByte());
-      if (coercion_kind == XmlaCoercionKind::BIGINT ||
-          coercion_kind == XmlaCoercionKind::INFER) {
-        return Value::BIGINT(value);
-      }
-      if (coercion_kind == XmlaCoercionKind::DOUBLE) {
-        return Value::DOUBLE(static_cast<double>(value));
-      }
-      return ValueFromText(std::to_string(value), coercion_kind);
+      auto text = ReadSqlDateTimeValueText();
+      return ValueFromText(text, coercion_kind);
     }
     case 0x13: {
       auto value = static_cast<int16_t>(ReadUInt16());
@@ -2973,6 +3261,10 @@ private:
     case 0x13:
     case 0x14:
     case 0x15:
+    case 0xAE:
+    case 0xAF:
+    case 0xB0:
+    case 0xB1:
     case 0x18:
     case 0x19:
     case 0x1A:
@@ -3156,6 +3448,15 @@ static bool TryParseSsasRowsFast(
   return false;
 }
 
+static bool EnableSsasFastRowParser() {
+  auto *raw_value = std::getenv("PBI_SCANNER_ENABLE_SSAS_FAST_ROWS");
+  if (!raw_value || !*raw_value) {
+    return false;
+  }
+  auto value = StringUtil::Lower(Trimmed(raw_value));
+  return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 static bool IsRecoverableEarlyFramingError(const Exception &ex,
                                            idx_t candidate_offset) {
   if (candidate_offset >= 8) {
@@ -3258,7 +3559,7 @@ static bool DecodeBufferedXmlaResponse(
         (std::string("SX_XPRESS ") + operation_label + " decompress").c_str(),
         decompress_start);
     auto parse_start = std::chrono::steady_clock::now();
-    if (known_columns && on_row &&
+    if (EnableSsasFastRowParser() && known_columns && on_row &&
         TryParseSsasRowsFast(decompressed, *known_columns, *on_row,
                              stop_callback)) {
       DebugTiming(
@@ -3274,7 +3575,7 @@ static bool DecodeBufferedXmlaResponse(
   }
   if (IsSxXmlaResponse(response)) {
     auto parse_start = std::chrono::steady_clock::now();
-    if (known_columns && on_row &&
+    if (EnableSsasFastRowParser() && known_columns && on_row &&
         TryParseSsasRowsFast(buffered_response, *known_columns, *on_row,
                              stop_callback)) {
       DebugTiming(
@@ -3302,6 +3603,14 @@ static bool DecodeBufferedXmlaResponse(
   parser.Feed(const_data_ptr_cast(buffered_response.data()),
               buffered_response.size());
   return false;
+}
+
+static bool IsUnsupportedSsasTokenError(const Exception &ex) {
+  auto message = StringUtil::Lower(ex.what());
+  return message.find("ssas binary xml unsupported token") !=
+             std::string::npos ||
+         message.find("ssas fast row parser unsupported token") !=
+             std::string::npos;
 }
 
 static void ValidateXmlaContentType(const HttpResponse &response,
@@ -3546,7 +3855,7 @@ void XmlaExecutor::ExecuteStreaming(
   auto transport_mode = ResolveXmlaTransportMode();
   auto buffer_response = transport_mode != XmlaTransportMode::PLAIN;
   std::string buffered_response;
-  XmlaStreamParser parser(false, on_schema, on_row);
+  XmlaStreamParser parser(false, on_schema, on_row, known_columns);
   auto response = http->PostStream(
       request.url, XmlaHeaders(request.access_token, transport_mode), envelope,
       "text/xml",
@@ -3564,9 +3873,21 @@ void XmlaExecutor::ExecuteStreaming(
       true);
   bool decoded_response = false;
   if (buffer_response && !(should_stop && should_stop())) {
-    decoded_response = DecodeBufferedXmlaResponse(
-        response, buffered_response, parser, "execution", known_columns,
-        &on_row, &should_stop);
+    try {
+      decoded_response = DecodeBufferedXmlaResponse(
+          response, buffered_response, parser, "execution", known_columns,
+          &on_row, &should_stop);
+    } catch (const Exception &ex) {
+      if ((transport_mode == XmlaTransportMode::SX ||
+           transport_mode == XmlaTransportMode::SX_XPRESS) &&
+          IsUnsupportedSsasTokenError(ex)) {
+        throw IOException(
+            "%s. Retry with PBI_SCANNER_XMLA_TRANSPORT=xpress for this query "
+            "shape while sx_xpress Date token coverage is expanded.",
+            ex.what());
+      }
+      throw;
+    }
   }
   parser.Finish();
   if (should_stop && should_stop() && response.HasRequestError()) {
