@@ -280,8 +280,7 @@ ResolveServicePrincipalMode(const named_parameter_map_t &named_parameters) {
   return AcquireServicePrincipalToken(credentials);
 }
 
-static string
-ResolveSessionAuthMode(ClientContext &context) {
+static string ResolveSessionAuthMode(ClientContext &context) {
   Value auth_mode_setting;
   if (!context.TryGetCurrentSetting("pbi_scanner_auth_mode",
                                     auth_mode_setting) ||

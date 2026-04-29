@@ -249,6 +249,7 @@
 
 - Start with the smallest correct change.
 - Run `make format-fix` after non-trivial C++ edits.
+- Before any `git push`, run `make format-fix` and `make format-check`; do not push while format-check fails.
 - Run at least the most relevant single test before finishing.
 - If behavior touches user-visible SQL errors, add or update a sqllogictest.
 - If behavior touches registration, loading, or extension wiring, smoke-test with the bundled DuckDB shell when feasible.

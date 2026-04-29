@@ -199,11 +199,11 @@ static void EffectiveExecutionTransportTestFunction(DataChunk &args,
 
 static void LoadInternal(ExtensionLoader &loader) {
   auto &config = loader.GetDatabaseInstance().config;
-  config.AddExtensionOption(
-      "pbi_scanner_auth_mode",
-      "Default auth mode for pbi_scanner table functions "
-      "(access_token, azure_cli, service_principal)",
-      LogicalType::VARCHAR, Value(""), SetPbiScannerAuthMode);
+  config.AddExtensionOption("pbi_scanner_auth_mode",
+                            "Default auth mode for pbi_scanner table functions "
+                            "(access_token, azure_cli, service_principal)",
+                            LogicalType::VARCHAR, Value(""),
+                            SetPbiScannerAuthMode);
 
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());
