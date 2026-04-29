@@ -99,6 +99,10 @@
 
 - DuckDB community publication is done through a descriptor PR to `duckdb/community-extensions`; do not copy built binaries into this repo.
 - Add `extensions/pbi_scanner/description.yml` in the community repository. The directory name must match `extension.name` exactly.
+- If you already maintain a fork of `duckdb/community-extensions`, prefer that existing local clone (for example `../community-extensions`) over a fresh clone.
+- Keep remotes configured so `origin` is your fork and `upstream` is `duckdb/community-extensions`.
+- Before opening a descriptor PR, sync your fork's `main` from `upstream/main`, push the synced `main` to your fork, then branch for the descriptor change.
+- Open the community PR from your fork feature branch into `duckdb/community-extensions:main` (do not open PRs from your fork `main`).
 - Use a pushed, validated commit SHA for `repo.ref`. Do not point `repo.ref` at a dirty local state, an unpushed branch, or an unvalidated commit.
 - For the current DuckDB 1.5.2 release, `repo.ref` should point at the commit that contains the 1.5.2 submodule bump, CI pin bump, local tooling bump if applicable, docs updates, and passing validation.
 - Descriptor fields to keep aligned with this repo:
@@ -136,6 +140,18 @@
   - `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
   - `git push origin HEAD --tags`
   - `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<release notes>"`
+- Preferred command sequence for the existing-fork community descriptor update:
+  - `cd ../community-extensions`
+  - `git fetch upstream`
+  - `git checkout main`
+  - `git rebase upstream/main`
+  - `git push origin main`
+  - `git checkout -b pbi_scanner-vX.Y.Z`
+  - edit `extensions/pbi_scanner/description.yml` (`extension.version`, `repo.ref`)
+  - `git add extensions/pbi_scanner/description.yml`
+  - `git commit -m "Update pbi_scanner to X.Y.Z"`
+  - `git push -u origin HEAD`
+  - `gh pr create --repo duckdb/community-extensions --base main --head <your-fork-owner>:pbi_scanner-vX.Y.Z --title "Update pbi_scanner to X.Y.Z" --body "<validation evidence>"`
 - Verification checklist before publishing the community descriptor update:
   - Release tag exists remotely and points to the intended commit.
   - GitHub release exists for the same tag.

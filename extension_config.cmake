@@ -3,5 +3,5 @@
 duckdb_extension_load(pbi_scanner
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
-    EXTENSION_VERSION 0.0.1
+    EXTENSION_VERSION 0.0.2
 )
