@@ -11,7 +11,6 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 - Multiple auth paths: `azure_cli`, `access_token`, and `service_principal`
 - DuckDB secret integration via `TYPE azure` secrets (`credential_chain` / `service_principal`)
 - Power BI locator support (`powerbi://...`) plus direct XMLA fast path (`https://.../xmla?...`)
-- XMLA transport controls (`plain`, `xpress`, `sx`, `sx_xpress`) with `sx_xpress` default
 - Local metadata cache for resolved targets/schemas (no token/secret persistence)
 
 ## Quick Start
@@ -47,7 +46,7 @@ The bundled shell already has `pbi_scanner` linked in.
 
 ### Step 3: Run a First Query
 
-Authenticate with Azure CLI first:
+In the examples below, we use Azure CLI login to authenticate.
 
 ```bash
 az login
@@ -70,6 +69,8 @@ FROM dax_query(
 ```
 
 #### Option B: Azure secret + `secret_name`
+
+If you already use another DuckDB Azure secret provider, you can use that secret instead of the `credential_chain` example shown here.
 
 ```sql
 INSTALL azure;
@@ -171,28 +172,12 @@ FROM dax_query(
 ## Catalog and Metadata Discovery
 
 Use these helper functions to inspect semantic model structure.
-For auth, use either `SET pbi_scanner_auth_mode = 'azure_cli'` or a secret (`Secret=...` / `secret_name := ...`):
 
 ```sql
-SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
-SELECT * FROM pbi_columns('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
-SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
-SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
-```
-
-## Query Execution
-
-### `dax_query(...)`
-
-`dax_query` executes DAX over XMLA and streams rows back to DuckDB.
-Quick Start shows both auth patterns; this example uses a connection-string secret.
-
-```sql
-SELECT *
-FROM dax_query(
-    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
-    'EVALUATE TOPN(10, VALUES(''DimDate''[Calendar Year]))'
-);
+SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_columns('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
 ```
 
 ### Local Extension Artifact Load (Optional)
@@ -208,46 +193,6 @@ Windows:
 ```bat
 duckdb.exe -unsigned -c "LOAD './build/release/extension/pbi_scanner/pbi_scanner.duckdb_extension';"
 ```
-
-## Performance
-
-`dax_query` runs native HTTP XMLA with schema probe + streaming execution. For large results, end-to-end time is typically dominated by service and network; extension-side parse/conversion still matters.
-
-### CI vs Local Benchmarking
-
-- **CI/offline tests**: `make test` (sqllogictest under `test/sql/`) and optional `uv run bench_native_http.py --smoke`
-- **Live benchmarking**: `uv run --group bench query_semantic_model_minimal.py`
-- **Minimal live SQL smoke**: `uv run query_semantic_model_sql_minimal.py`
-- **Live bench inputs**: set `PBI_BENCH_CONNECTION_STRING`, `PBI_BENCH_DAX`, optional `PBI_BENCH_SECRET_NAME`
-- **No real credentials in git**: use env vars, gitignored `.env`, or files under `local/`
-
-For repeated SQL smoke runs after the DuckDB `azure` extension is installed, set `PBI_SQL_INSTALL_AZURE=0` to skip the install check/download step.
-
-### Benchmark and Transport Knobs
-
-- `PBI_BENCH_MODE=count|materialize`
-- `PBI_BENCH_ITERATIONS=<n>`
-- `PBI_BENCH_DIRECT_XMLA=1` to resolve locator once in Python and run direct XMLA
-- `PBI_SCANNER_XMLA_TRANSPORT=plain|xpress|sx|sx_xpress` (default: `sx_xpress`)
-- `PBI_BENCH_METADATA_PROBE=1` to validate metadata TVFs in the same session
-- `PBI_BENCH_METADATA_MATRIX=1` to classify primary vs compatibility transport behavior
-- `PBI_BENCH_METADATA_STRICT_SX=1` to fail if `sx_xpress` metadata only passes via compatibility fallback
-- `PBI_SCANNER_DISABLE_METADATA_CACHE=1` for cold-target/schema measurements
-- `PBI_SCANNER_DEBUG_TIMINGS=1` for per-phase timings
-
-`sx_xpress` remains the default fast path. `xpress` and `plain` remain available as explicit compatibility/diagnostic transports until strict metadata and DAX validation is consistently green across broader live model coverage.
-
-### Metadata Cache
-
-Resolved targets and schema metadata are cached on disk by default:
-
-- No tokens or secrets are stored
-- `PBI_SCANNER_CACHE_DIR` overrides location
-- `PBI_SCANNER_DISABLE_METADATA_CACHE=1` disables cache
-- `PBI_SCANNER_TARGET_CACHE_TTL_SECONDS` and `PBI_SCANNER_SCHEMA_CACHE_TTL_SECONDS` tune TTLs
-
-For detailed transport benchmarks and parser notes, see [docs/xmla_transport_performance.md](docs/xmla_transport_performance.md).
-The XMLA binary parser implementation is independent, informed by Microsoft Open Specifications and observed wire behavior/interoperability testing, and does not derive from ADOMD.NET source.
 
 ## Development
 
@@ -287,7 +232,7 @@ make format-fix
 
 ### Local Script Tooling
 
-Run helper scripts with [`uv`](https://docs.astral.sh/uv/):
+Run helper scripts with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv run bench_native_http.py --smoke
