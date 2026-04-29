@@ -10,7 +10,7 @@ The original benchmark appeared to spend most of its time in DuckDB relation cre
 - Plain XMLA execution returned a very large text XML payload: on the order of hundreds of MB for a wide fact-table projection (roughly 100k-scale rows and about a dozen columns).
 - DAX Studio is faster largely because it uses ADOMD.NET, and modern Microsoft Analysis Services client libraries negotiate compressed binary XML transport with Power BI XMLA endpoints.
 
-The current extension now supports experimental compressed transport modes:
+The current extension supports compressed transport modes:
 
 ```bash
 PBI_SCANNER_XMLA_TRANSPORT=xpress \
@@ -25,12 +25,14 @@ uv run --group bench query_semantic_model_minimal.py
 
 The extension selects the wire transport from `PBI_SCANNER_XMLA_TRANSPORT`.
 
-| Value       | HTTP response target      | Parser path                          | Default? |
-| ----------- | ------------------------- | ------------------------------------ | -------- |
-| `plain`     | `text/xml`                | Streaming text XML parser            | No       |
-| `xpress`    | `application/xml+xpress`  | XPRESS LZ77, then text XML parser    | No       |
-| `sx`        | `application/sx`          | Xpress schema probe, then SSAS binary XML parser | No       |
-| `sx_xpress` | `application/sx+xpress`   | Xpress schema probe, then XPRESS LZ77 plus SSAS binary parser | Yes      |
+
+| Value       | HTTP response target     | Parser path                                                   | Default? |
+| ----------- | ------------------------ | ------------------------------------------------------------- | -------- |
+| `plain`     | `text/xml`               | Streaming text XML parser                                     | No       |
+| `xpress`    | `application/xml+xpress` | XPRESS LZ77, then text XML parser                             | No       |
+| `sx`        | `application/sx`         | Xpress schema probe, then SSAS binary XML parser              | No       |
+| `sx_xpress` | `application/sx+xpress`  | Xpress schema probe, then XPRESS LZ77 plus SSAS binary parser | Yes      |
+
 
 If the environment variable is unset or empty, the extension uses `sx_xpress`. Set `PBI_SCANNER_XMLA_TRANSPORT=plain` to force the original text XML path if a model or query shape hits an unsupported binary XML record.
 
@@ -55,25 +57,25 @@ It returned on the order of:
 Observed transport variants:
 
 
-| Transport   | Content-Type             | Payload | Status                                         |
-| ----------- | ------------------------ | ------- | ---------------------------------------------- |
-| `plain`     | `text/xml`               | ~282 MB | Supported                                      |
+| Transport   | Content-Type             | Payload | Status                                                                 |
+| ----------- | ------------------------ | ------- | ---------------------------------------------------------------------- |
+| `plain`     | `text/xml`               | ~282 MB | Supported                                                              |
 | `sx`        | `application/sx`         | ~84 MB  | Negotiates; decoder path is available but less useful than `sx_xpress` |
-| `xpress`    | `application/xml+xpress` | ~10 MB  | Supported                                      |
-| `sx_xpress` | `application/sx+xpress`  | ~4.5 MB | Supported experimentally                       |
+| `xpress`    | `application/xml+xpress` | ~10 MB  | Supported                                                              |
+| `sx_xpress` | `application/sx+xpress`  | ~4.5 MB | Supported (default fast path)                                          |
 
 
 Representative timings:
 
 
-| Scenario                          | Relation creation | Fetch/materialize | Notes                       |
-| --------------------------------- | ----------------- | ----------------- | --------------------------- |
-| Plain direct XMLA count           | ~3.7s             | ~28.0s            | ~282 MB text XML            |
-| Xpress direct XMLA count          | ~4.1s             | ~5.3-5.6s         | ~10 MB compressed XML       |
-| Xpress direct XMLA materialize    | ~4.0s             | ~5.5s             | Full Polars materialization |
+| Scenario                          | Relation creation            | Fetch/materialize | Notes                                           |
+| --------------------------------- | ---------------------------- | ----------------- | ----------------------------------------------- |
+| Plain direct XMLA count           | ~3.7s                        | ~28.0s            | ~282 MB text XML                                |
+| Xpress direct XMLA count          | ~4.1s                        | ~5.3-5.6s         | ~10 MB compressed XML                           |
+| Xpress direct XMLA materialize    | ~4.0s                        | ~5.5s             | Full Polars materialization                     |
 | SX xpress direct XMLA count       | ~6.5s cold / ~0.3s warm bind | ~2.4s             | Xpress schema probe, ~4.45 MB execution payload |
-| SX xpress direct XMLA materialize | ~6.5s cold / ~0.3s warm bind | ~2.3-2.7s         | Full Polars materialization |
-| SX xpress repeat default run      | target/schema cache hit      | expected <5s      | Skips control-plane and schema probe |
+| SX xpress direct XMLA materialize | ~6.5s cold / ~0.3s warm bind | ~2.3-2.7s         | Full Polars materialization                     |
+| SX xpress repeat default run      | target/schema cache hit      | expected <5s      | Skips control-plane and schema probe            |
 
 
 The xpress post-transport profile showed:
@@ -146,7 +148,7 @@ The remaining hardening path:
 3. Confirm whether `application/sx` can share the same decoder without the XPRESS layer.
 4. Keep `plain` and `xpress` as fallbacks.
 
-Keep `sx_xpress` behind `PBI_SCANNER_XMLA_TRANSPORT=sx_xpress` until the decoder is validated against live Power BI payloads from multiple models.
+`sx_xpress` remains the default transport. Keep validating it across additional live models and query shapes, and use `plain` or `xpress` as explicit fallbacks when needed.
 
 ### 3. Reduce schema probe duplication further
 
@@ -232,3 +234,4 @@ Repeat-run default benchmark with persistent cache enabled:
 PBI_BENCH_MODE=materialize \
 uv run --group bench query_semantic_model_minimal.py
 ```
+
