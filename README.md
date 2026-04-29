@@ -20,7 +20,7 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 
 - DuckDB extension toolchain requirements (CMake, C++ build toolchain, OpenSSL)
 - Git with submodule support
-- Azure CLI login for the credential-chain examples (`az login`)
+- Azure CLI (`az`) installed
 
 ### Step 1: Clone and Build
 
@@ -47,28 +47,29 @@ The bundled shell already has `pbi_scanner` linked in.
 
 ### Step 3: Run a First Query
 
-```sql
-INSTALL azure;
-LOAD azure;
+Authenticate with Azure CLI first:
 
-CREATE SECRET pbi_cli (
-    TYPE azure,
-    PROVIDER credential_chain,
-    CHAIN 'cli'
-);
+```bash
+az login
+```
+
+Then use one auth option below.
+
+#### Option A: Azure CLI auth mode
+
+```sql
+INSTALL pbi_scanner FROM community;
+LOAD pbi_scanner;
+SET pbi_scanner_auth_mode = 'azure_cli';
 
 SELECT *
 FROM dax_query(
-    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
     'EVALUATE ROW("probe_ok", 1)'
 );
 ```
 
-Replace the workspace and semantic model placeholders with values you can access.
-
-### Community Extension Hello World
-
-If you want the same flow used for the DuckDB community extension descriptor:
+#### Option B: Azure secret + `secret_name`
 
 ```sql
 INSTALL azure;
@@ -85,10 +86,13 @@ LOAD pbi_scanner;
 
 SELECT *
 FROM dax_query(
-    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
-    'EVALUATE ROW("probe_ok", 1)'
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("probe_ok", 1)',
+    secret_name := 'pbi_cli'
 );
 ```
+
+Replace the workspace and semantic model placeholders with values you can access.
 
 ## Connection Configuration
 
@@ -116,7 +120,7 @@ Use the direct XMLA form when you already have a resolved target and want to byp
 - `auth_mode := 'access_token'`
 - `auth_mode := 'service_principal'`
 
-You can also configure a session default once:
+Set a session default when using direct auth modes:
 
 ```sql
 SET pbi_scanner_auth_mode = 'azure_cli';
@@ -125,11 +129,12 @@ SET pbi_scanner_auth_mode = 'azure_cli';
 When both are provided, per-call named `auth_mode := ...` overrides the session
 `SET` value for that call.
 
-For interactive SQL sessions, the recommended path is DuckDB secret-based auth with DuckDB's Azure extension.
+Quick Start already shows the Azure CLI mode and the Azure secret mode end to end.
+Use this section as reference for secret variants and other auth modes.
 
 ### DuckDB Secret-Based Auth
 
-Install and load DuckDB's Azure extension, then create a reusable secret:
+Create a reusable DuckDB Azure secret:
 
 ```sql
 INSTALL azure;
@@ -142,7 +147,7 @@ CREATE SECRET pbi_cli (
 );
 ```
 
-Use it in the connection string:
+Use either pattern with `dax_query`:
 
 ```sql
 SELECT *
@@ -165,7 +170,8 @@ FROM dax_query(
 
 ## Catalog and Metadata Discovery
 
-Use these helper functions to inspect semantic model structure:
+Use these helper functions to inspect semantic model structure.
+For auth, use either `SET pbi_scanner_auth_mode = 'azure_cli'` or a secret (`Secret=...` / `secret_name := ...`):
 
 ```sql
 SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;');
@@ -179,6 +185,7 @@ SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myor
 ### `dax_query(...)`
 
 `dax_query` executes DAX over XMLA and streams rows back to DuckDB.
+Quick Start shows both auth patterns; this example uses a connection-string secret.
 
 ```sql
 SELECT *

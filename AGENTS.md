@@ -32,10 +32,10 @@
 - `extension_config.cmake`: tells DuckDB to load `pbi_scanner` and tests.
 - `README.md`: local build, test, runtime, and Windows notes.
 - `pyproject.toml`: local Python tool metadata for **uv** (`uv run`, `uv run --group bench`, `uv run --group format`, `uv run --group tidy`); not part of the C++ build.
-- `query_semantic_model_minimal.py`: **local-only** helper for real Power BI DAX runs and performance benchmarking (not CI). Prefer `PBI_BENCH_*` env vars; do not commit secrets. The repo ships only fictional placeholder defaults; real workspaces belong in env vars, `.env` (gitignored), or `local/`. Run with `uv run --group bench query_semantic_model_minimal.py` (or rely on the bundled `duckdb` CLI if Python `duckdb` is not used). Supports `PBI_BENCH_MODE=count|materialize`, `PBI_BENCH_ITERATIONS`, `PBI_BENCH_DIRECT_XMLA`, metadata probe matrix/strict modes (`PBI_BENCH_METADATA_PROBE`, `PBI_BENCH_METADATA_MATRIX`, `PBI_BENCH_METADATA_STRICT_SX`), and `PBI_SCANNER_XMLA_TRANSPORT=plain|xpress|sx|sx_xpress`; unset transport defaults to `sx_xpress`. Use `PBI_SCANNER_DISABLE_METADATA_CACHE=1` for cold target/schema benchmarks.
+- `query_semantic_model_minimal.py`: **local-only** helper for real Power BI DAX runs and performance benchmarking (not CI). Prefer `PBI_BENCH_`* env vars; do not commit secrets. The repo ships only fictional placeholder defaults; real workspaces belong in env vars, `.env` (gitignored), or `local/`. Run with `uv run --group bench query_semantic_model_minimal.py` (or rely on the bundled `duckdb` CLI if Python `duckdb` is not used). Supports `PBI_BENCH_MODE=count|materialize`, `PBI_BENCH_ITERATIONS`, `PBI_BENCH_DIRECT_XMLA`, metadata probe matrix/strict modes (`PBI_BENCH_METADATA_PROBE`, `PBI_BENCH_METADATA_MATRIX`, `PBI_BENCH_METADATA_STRICT_SX`), and `PBI_SCANNER_XMLA_TRANSPORT=plain|xpress|sx|sx_xpress`; unset transport defaults to `sx_xpress`. Use `PBI_SCANNER_DISABLE_METADATA_CACHE=1` for cold target/schema benchmarks.
 - `query_semantic_model_sql_minimal.py`: **local-only** SQL smoke helper for the smallest practical live DuckDB CLI path. It loads the local extension, optionally installs/loads DuckDB `azure`, creates an Azure CLI credential-chain secret, runs `dax_query`, and prints CLI output. Use it to separate SQL/extension behavior from Python DuckDB/Polars benchmark harness overhead. Run with `uv run query_semantic_model_sql_minimal.py`; set `PBI_SQL_INSTALL_AZURE=0` after the first successful Azure extension install to skip repeated install overhead.
 - `bench_duckdb_cli.py`: shared helpers for that CLI path (used by `bench_native_http.py --live` and the minimal script fallback).
-- `bench_native_http.py`: optional helper—`uv run bench_native_http.py --smoke` (offline, CI-friendly manual check); `uv run bench_native_http.py --live` times `dax_query` via the bundled CLI and `PBI_BENCH_*`. For day-to-day real-query perf, prefer `query_semantic_model_minimal.py` (see README Performance section).
+- `bench_native_http.py`: optional helper—`uv run bench_native_http.py --smoke` (offline, CI-friendly manual check); `uv run bench_native_http.py --live` times `dax_query` via the bundled CLI and `PBI_BENCH_`*. For day-to-day real-query perf, prefer `query_semantic_model_minimal.py` (see README Performance section).
 - `.github/workflows/MainDistributionPipeline.yml`: CI runs build distribution plus code quality checks.
 
 ## Editor / Agent Rules
@@ -68,29 +68,29 @@
 - Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
 - For a stable/current bump, update `duckdb/` to the target DuckDB release tag and `extension-ci-tools/` to the matching release branch or commit.
 - For DuckDB 1.5.2 specifically, the verified refs are:
-	- `duckdb` tag `v1.5.2` at `8a5851971fae891f292c2714d86046ee018e9737`.
-	- `extension-ci-tools` branch `v1.5.2` at `ec20f45aabeb9fcfcfa044dda249597f066d4826`.
+  - `duckdb` tag `v1.5.2` at `8a5851971fae891f292c2714d86046ee018e9737`.
+  - `extension-ci-tools` branch `v1.5.2` at `ec20f45aabeb9fcfcfa044dda249597f066d4826`.
 - Update `.github/workflows/MainDistributionPipeline.yml` stable build and code-quality jobs so the reusable workflow ref, `duckdb_version`, and `ci_tools_version` all match the new stable release.
 - If `pyproject.toml` pins Python `duckdb` for local helper/benchmark tooling, bump it to the same release and regenerate `uv.lock` with `uv lock`.
 - Update `README.md` when the supported/current DuckDB release changes or when community publication instructions change.
 - Prefer a clean/reconfigured build after submodule bumps because generated `build/` state may still contain paths or settings from the previous DuckDB release.
 - Verify the bump before treating the commit as publishable:
-	- `git -C duckdb describe --tags --exact-match`
-	- `git -C duckdb rev-parse HEAD`
-	- `git -C extension-ci-tools rev-parse HEAD`
-	- release build
-	- focused sqllogictest
-	- format and tidy checks
+  - `git -C duckdb describe --tags --exact-match`
+  - `git -C duckdb rev-parse HEAD`
+  - `git -C extension-ci-tools rev-parse HEAD`
+  - release build
+  - focused sqllogictest
+  - format and tidy checks
 
 ## Forward Compatibility Testing
 
 - Keep the stable CI job pinned to the latest validated DuckDB release.
 - Add or maintain a separate `duckdb-next-build` job that uses DuckDB and extension-ci-tools `main`:
-	- `uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main`
-	- `duckdb_version: main`
-	- `ci_tools_version: main`
-	- `extension_name: pbi_scanner`
-	- same `exclude_archs` as stable CI unless support intentionally differs.
+  - `uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main`
+  - `duckdb_version: main`
+  - `ci_tools_version: main`
+  - `extension_name: pbi_scanner`
+  - same `exclude_archs` as stable CI unless support intentionally differs.
 - Treat `duckdb-next-build` as an early warning for upcoming DuckDB API/build changes. It is not the current release artifact.
 - If stable passes but `main` fails near a DuckDB release, create a compatibility branch for the upcoming release and use `repo.ref_next` in the DuckDB Community Extensions descriptor.
 - Once the new DuckDB release is out and validated, update the normal stable refs and community `repo.ref`; do not keep `repo.ref_next` as the current release pointer.
@@ -102,15 +102,15 @@
 - Use a pushed, validated commit SHA for `repo.ref`. Do not point `repo.ref` at a dirty local state, an unpushed branch, or an unvalidated commit.
 - For the current DuckDB 1.5.2 release, `repo.ref` should point at the commit that contains the 1.5.2 submodule bump, CI pin bump, local tooling bump if applicable, docs updates, and passing validation.
 - Descriptor fields to keep aligned with this repo:
-	- `extension.name: pbi_scanner`
-	- `extension.description: DuckDB extension for querying Power BI Semantic Models with DAX.`
-	- `extension.language: C++`
-	- `extension.build: cmake`
-	- `extension.license: MIT`
-	- `extension.maintainers`: confirm final GitHub handle(s) before publishing.
-	- `extension.excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"`
-	- `repo.github: crazy-treyn/pbi_scanner`
-	- `repo.ref`: validated current release commit SHA.
+  - `extension.name: pbi_scanner`
+  - `extension.description: DuckDB extension for querying Power BI Semantic Models with DAX.`
+  - `extension.language: C++`
+  - `extension.build: cmake`
+  - `extension.license: MIT`
+  - `extension.maintainers`: confirm final GitHub handle(s) before publishing.
+  - `extension.excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"`
+  - `repo.github: crazy-treyn/pbi_scanner`
+  - `repo.ref`: validated current release commit SHA.
 - Use `repo.ref_next` only for future-release compatibility when DuckDB `main` needs a different commit than latest stable.
 - Include validation evidence in the community PR description: stable CI, next CI if available, local build/test commands, and known platform exclusions.
 
@@ -118,39 +118,39 @@
 
 - Treat extension version bumps as release-management changes that must keep local metadata, GitHub release tags, and community descriptor references in sync.
 - Version format convention:
-	- Use numeric semver for metadata fields (for example `0.0.1`).
-	- Use `v`-prefixed tags/releases in GitHub (for example `v0.0.1`).
+  - Use numeric semver for metadata fields (for example `0.0.1`).
+  - Use `v`-prefixed tags/releases in GitHub (for example `v0.0.1`).
 - Update these files/fields together for each bump:
-	- `extension_config.cmake`: set `EXTENSION_VERSION` to the new numeric semver.
-	- `duckdb/community-extensions` descriptor (`extensions/pbi_scanner/description.yml`): set `extension.version` to the same numeric semver.
-	- `duckdb/community-extensions` descriptor: set `repo.ref` to the validated release commit SHA from this repository.
-	- Optional: use `repo.ref_next` only when future DuckDB compatibility requires a different commit than stable.
+  - `extension_config.cmake`: set `EXTENSION_VERSION` to the new numeric semver.
+  - `duckdb/community-extensions` descriptor (`extensions/pbi_scanner/description.yml`): set `extension.version` to the same numeric semver.
+  - `duckdb/community-extensions` descriptor: set `repo.ref` to the validated release commit SHA from this repository.
+  - Optional: use `repo.ref_next` only when future DuckDB compatibility requires a different commit than stable.
 - Preferred command sequence for a release bump (from this repo root):
-	- `git status --short --branch`
-	- `rg "EXTENSION_VERSION|0\\.0\\.1|v0\\.0\\.1" extension_config.cmake README.md .github/workflows/MainDistributionPipeline.yml AGENTS.md`
-	- `make format-check`
-	- `make release`
-	- `./build/release/test/unittest "test/sql/pbi_scanner.test"`
-	- `git add extension_config.cmake AGENTS.md README.md .github/workflows/MainDistributionPipeline.yml`
-	- `git commit -m "<release prep message>"`
-	- `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-	- `git push origin HEAD --tags`
-	- `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<release notes>"`
+  - `git status --short --branch`
+  - `rg "EXTENSION_VERSION|0\\.0\\.1|v0\\.0\\.1" extension_config.cmake README.md .github/workflows/MainDistributionPipeline.yml AGENTS.md`
+  - `make format-check`
+  - `make release`
+  - `./build/release/test/unittest "test/sql/pbi_scanner.test"`
+  - `git add extension_config.cmake AGENTS.md README.md .github/workflows/MainDistributionPipeline.yml`
+  - `git commit -m "<release prep message>"`
+  - `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+  - `git push origin HEAD --tags`
+  - `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<release notes>"`
 - Verification checklist before publishing the community descriptor update:
-	- Release tag exists remotely and points to the intended commit.
-	- GitHub release exists for the same tag.
-	- Community descriptor `extension.version` matches numeric semver.
-	- Community descriptor `repo.ref` equals the exact release commit SHA.
-	- Community PR body includes validation evidence (build/tests plus relevant refs).
+  - Release tag exists remotely and points to the intended commit.
+  - GitHub release exists for the same tag.
+  - Community descriptor `extension.version` matches numeric semver.
+  - Community descriptor `repo.ref` equals the exact release commit SHA.
+  - Community PR body includes validation evidence (build/tests plus relevant refs).
 
 ## Test Commands
 
 - **CI expectation:** tests under `test/sql/` are deterministic and offline (no live Power BI). `make test` exercises those.
 - **Local benchmarking:** use `uv run --group bench query_semantic_model_minimal.py` (or CLI fallback) for authenticated, real-query performance; use `uv run bench_native_http.py --smoke` as an extra offline smoke after `make release` if desired.
 - `make test`: runs `make test_release`.
-- `make test_release`: runs the release test runner against `test/*`.
-- `make test_debug`: runs the debug test runner against `test/*`.
-- `make test_reldebug`: runs the reldebug test runner against `test/*`.
+- `make test_release`: runs the release test runner against `test/`*.
+- `make test_debug`: runs the debug test runner against `test/`*.
+- `make test_reldebug`: runs the reldebug test runner against `test/`*.
 
 ## Run A Single Test
 
