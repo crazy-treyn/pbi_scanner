@@ -9,6 +9,9 @@ Configuration (prefer env vars so nothing secret is hardcoded):
       DAX to run, for example EVALUATE 'My Table'.
   PBI_BENCH_SECRET_NAME
       Optional; defaults to pbi_cli.
+  PBI_BENCH_AUTH_MODE
+      Optional; session auth mode SET value: azure_cli, access_token, or
+      service_principal. Defaults to azure_cli unless direct token mode is used.
   PBI_BENCH_MODE
       count or materialize; defaults to materialize.
   PBI_BENCH_ITERATIONS
@@ -34,8 +37,9 @@ Configuration (prefer env vars so nothing secret is hardcoded):
   PBI_BENCH_USE_BUNDLED_CLI
       Set 1/true to force bundled DuckDB CLI fallback.
   PBI_BENCH_USE_DUCKDB_AZURE_SECRET
-      On Windows, set 1/true to use DuckDB Azure secrets instead of direct
-      Azure CLI tokens.
+      Optional; set 1/true to use DuckDB Azure secret auth (installs/loads
+      azure and creates secret). Default path is SET-based auth mode without
+      azure extension setup overhead.
   PBI_SCANNER_XMLA_TRANSPORT
       plain, sx, xpress, or sx_xpress; defaults to sx_xpress.
   PBI_SCANNER_DISABLE_METADATA_CACHE
@@ -129,14 +133,29 @@ extension_path = (
 )
 
 
-def _bench_config() -> tuple[str, str, str]:
+def _normalize_auth_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "cli":
+        return "azure_cli"
+    if normalized in {"azure_cli", "access_token", "service_principal"}:
+        return normalized
+    raise ValueError(
+        "PBI_BENCH_AUTH_MODE must be one of azure_cli, access_token, "
+        "service_principal, or cli"
+    )
+
+
+def _bench_config() -> tuple[str, str, str, str]:
     cs = (
         os.environ.get("PBI_BENCH_CONNECTION_STRING", "").strip()
         or _DEFAULT_CONNECTION_STRING
     )
     dax = os.environ.get("PBI_BENCH_DAX", "").strip() or _DEFAULT_DAX
     secret = os.environ.get("PBI_BENCH_SECRET_NAME", "pbi_cli").strip() or "pbi_cli"
-    return cs, dax, secret
+    auth_mode = (
+        os.environ.get("PBI_BENCH_AUTH_MODE", "").strip() or "azure_cli"
+    )
+    return cs, dax, secret, _normalize_auth_mode(auth_mode)
 
 
 def _parse_connection_string(connection_string: str) -> dict[str, str]:
@@ -293,22 +312,33 @@ def log_timing(label: str, started_at: float) -> None:
 def _dax_sql(
     connection_string: str,
     dax_query: str,
-    secret_name: str,
+    secret_name: str | None,
     mode: str,
     access_token: str | None = None,
 ) -> str:
-    auth_sql = (
-        f"access_token := '{_sql_escape(access_token)}'"
-        if access_token is not None
-        else f"secret_name := '{_sql_escape(secret_name)}'"
-    )
-    source_sql = f"""
-        dax_query(
-            '{_sql_escape(connection_string)}',
-            '{_sql_escape(dax_query)}',
-            {auth_sql}
-        )
-    """
+    if access_token is not None:
+        source_sql = f"""
+            dax_query(
+                '{_sql_escape(connection_string)}',
+                '{_sql_escape(dax_query)}',
+                access_token := '{_sql_escape(access_token)}'
+            )
+        """
+    elif secret_name:
+        source_sql = f"""
+            dax_query(
+                '{_sql_escape(connection_string)}',
+                '{_sql_escape(dax_query)}',
+                secret_name := '{_sql_escape(secret_name)}'
+            )
+        """
+    else:
+        source_sql = f"""
+            dax_query(
+                '{_sql_escape(connection_string)}',
+                '{_sql_escape(dax_query)}'
+            )
+        """
     if mode == "count":
         return f"SELECT count(*) AS total_rows FROM {source_sql}"
     if mode == "materialize":
@@ -351,15 +381,20 @@ def _sql_escape(value: str) -> str:
 def _metadata_function_sql(
     function_name: str,
     connection_string: str,
-    secret_name: str,
+    secret_name: str | None,
     access_token: str | None = None,
 ) -> str:
-    auth_sql = (
-        f"access_token := '{_sql_escape(access_token)}'"
-        if access_token is not None
-        else f"secret_name := '{_sql_escape(secret_name)}'"
-    )
-    return f"{function_name}('{_sql_escape(connection_string)}', {auth_sql})"
+    if access_token is not None:
+        return (
+            f"{function_name}('{_sql_escape(connection_string)}', "
+            f"access_token := '{_sql_escape(access_token)}')"
+        )
+    if secret_name:
+        return (
+            f"{function_name}('{_sql_escape(connection_string)}', "
+            f"secret_name := '{_sql_escape(secret_name)}')"
+        )
+    return f"{function_name}('{_sql_escape(connection_string)}')"
 
 
 def _normalized_column_name(value: str) -> str:
@@ -473,7 +508,7 @@ def _metadata_transport_profiles(
 def _run_metadata_probe_profile(
     con: object,
     connection_string: str,
-    secret_name: str,
+    secret_name: str | None,
     access_token: str | None,
     profile_name: str,
     transport: str,
@@ -670,7 +705,7 @@ def _classify_metadata_outcomes(
 def _run_metadata_probes(
     con: object,
     connection_string: str,
-    secret_name: str,
+    secret_name: str | None,
     access_token: str | None = None,
 ) -> None:
     fail_fast = _truthy_env("PBI_BENCH_METADATA_FAIL_FAST")
@@ -770,7 +805,7 @@ def _run_metadata_probes(
 
 
 def run_with_python_duckdb(
-    connection_string: str, dax_query: str, secret_name: str
+    connection_string: str, dax_query: str, secret_name: str, default_auth_mode: str
 ) -> None:
     import duckdb  # noqa: PLC0415
     from bench_duckdb_cli import _windows_runtime_path  # noqa: PLC0415
@@ -801,13 +836,14 @@ def run_with_python_duckdb(
         connection_string = resolve_direct_xmla_connection_string(connection_string)
 
     access_token = None
-    use_direct_token = os.name == "nt" and not _truthy_env(
-        "PBI_BENCH_USE_DUCKDB_AZURE_SECRET"
-    )
+    use_secret_auth = _truthy_env("PBI_BENCH_USE_DUCKDB_AZURE_SECRET")
+    use_direct_token = os.name == "nt" and not use_secret_auth
+    session_auth_mode = default_auth_mode
     if use_direct_token:
         step_started_at = perf_counter()
         access_token = _az_access_token()
         log_timing("Azure CLI access token", step_started_at)
+        session_auth_mode = "access_token"
         print(
             "[python] using direct Azure CLI access token auth "
             "for Python DuckDB API on Windows"
@@ -821,7 +857,13 @@ def run_with_python_duckdb(
     con.sql(f"LOAD '{ext_escaped}'")
     log_timing("LOAD pbi_scanner", step_started_at)
 
-    if access_token is None:
+    step_started_at = perf_counter()
+    con.sql(f"SET pbi_scanner_auth_mode = '{_sql_escape(session_auth_mode)}'")
+    log_timing("SET pbi_scanner_auth_mode", step_started_at)
+
+    active_secret_name: str | None = None
+    if use_secret_auth:
+        active_secret_name = secret_name
         step_started_at = perf_counter()
         con.install_extension("azure")
         log_timing("INSTALL azure", step_started_at)
@@ -842,14 +884,22 @@ def run_with_python_duckdb(
 
     if metadata_probe:
         step_started_at = perf_counter()
-        _run_metadata_probes(con, connection_string, secret_name, access_token)
+        _run_metadata_probes(
+            con, connection_string, active_secret_name, access_token
+        )
         log_timing("metadata probe total", step_started_at)
 
     for iteration in range(1, iterations + 1):
         prefix = f"iteration {iteration}/{iterations} {mode}"
         step_started_at = perf_counter()
         relation = con.sql(
-            _dax_sql(connection_string, dax_query, secret_name, mode, access_token)
+            _dax_sql(
+                connection_string,
+                dax_query,
+                active_secret_name,
+                mode,
+                access_token,
+            )
         )
         log_timing(f"{prefix} relation creation", step_started_at)
 
@@ -913,13 +963,13 @@ def run_with_bundled_cli(
 
 
 def main() -> None:
-    connection_string, dax_query, secret_name = _bench_config()
+    connection_string, dax_query, secret_name, auth_mode = _bench_config()
 
     from bench_duckdb_cli import python_duckdb_connect_usable  # noqa: PLC0415
 
     force_cli = _truthy_env("PBI_BENCH_USE_BUNDLED_CLI")
     if python_duckdb_connect_usable() and not force_cli:
-        run_with_python_duckdb(connection_string, dax_query, secret_name)
+        run_with_python_duckdb(connection_string, dax_query, secret_name, auth_mode)
     else:
         print(
             "[python] using bundled DuckDB CLI "

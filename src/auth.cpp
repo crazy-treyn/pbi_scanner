@@ -281,9 +281,32 @@ ResolveServicePrincipalMode(const named_parameter_map_t &named_parameters) {
 }
 
 static string
-ResolveDirectAuthMode(const named_parameter_map_t &named_parameters) {
+ResolveSessionAuthMode(ClientContext &context) {
+  Value auth_mode_setting;
+  if (!context.TryGetCurrentSetting("pbi_scanner_auth_mode",
+                                    auth_mode_setting) ||
+      auth_mode_setting.IsNull()) {
+    return string();
+  }
+  auto auth_mode = StringUtil::Lower(Trimmed(auth_mode_setting.ToString()));
+  if (auth_mode == "cli") {
+    return "azure_cli";
+  }
+  return auth_mode;
+}
+
+static string
+ResolveDirectAuthMode(ClientContext &context,
+                      const named_parameter_map_t &named_parameters) {
   auto auth_mode = StringUtil::Lower(
       GetOptionalNamedParameter(named_parameters, "auth_mode"));
+  if (!auth_mode.empty()) {
+    if (auth_mode == "cli") {
+      return "azure_cli";
+    }
+    return auth_mode;
+  }
+  auth_mode = ResolveSessionAuthMode(context);
   if (!auth_mode.empty()) {
     return auth_mode;
   }
@@ -299,8 +322,9 @@ ResolveDirectAuthMode(const named_parameter_map_t &named_parameters) {
 }
 
 static string
-ResolveDirectAccessToken(const named_parameter_map_t &named_parameters) {
-  auto auth_mode = ResolveDirectAuthMode(named_parameters);
+ResolveDirectAccessToken(ClientContext &context,
+                         const named_parameter_map_t &named_parameters) {
+  auto auth_mode = ResolveDirectAuthMode(context, named_parameters);
   if (auth_mode.empty() || auth_mode == "access_token") {
     return ResolveAccessTokenMode(named_parameters);
   }
@@ -461,7 +485,7 @@ ResolvePowerBIAccessToken(ClientContext &context,
                           const PowerBIConnectionConfig &connection_config,
                           const named_parameter_map_t &named_parameters) {
   if (HasDirectAuthInputs(named_parameters)) {
-    return ResolveDirectAccessToken(named_parameters);
+    return ResolveDirectAccessToken(context, named_parameters);
   }
 
   auto secret_name =
@@ -470,7 +494,7 @@ ResolvePowerBIAccessToken(ClientContext &context,
     return ResolveSecretBackedAccessToken(context, secret_name);
   }
 
-  return ResolveDirectAccessToken(named_parameters);
+  return ResolveDirectAccessToken(context, named_parameters);
 }
 
 static string ExtractExceptionMessage(const string &error_text) {

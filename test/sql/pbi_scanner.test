@@ -142,6 +142,27 @@ FROM dax_query(
 ----
 access_token named parameter or PBI_XMLA_ACCESS_TOKEN environment variable is required
 
+statement ok
+SET pbi_scanner_auth_mode='azure_cli';
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)',
+    auth_mode := 'unsupported_mode'
+);
+----
+unsupported auth_mode "unsupported_mode"
+
+statement ok
+SET pbi_scanner_auth_mode='';
+
+statement error
+SET pbi_scanner_auth_mode='unsupported_mode';
+----
+unsupported auth_mode "unsupported_mode"
+
 statement error
 SELECT *
 FROM dax_query(

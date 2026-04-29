@@ -66,6 +66,30 @@ FROM dax_query(
 
 Replace the workspace and semantic model placeholders with values you can access.
 
+### Community Extension Hello World
+
+If you want the same flow used for the DuckDB community extension descriptor:
+
+```sql
+INSTALL azure;
+LOAD azure;
+
+CREATE SECRET pbi_cli (
+    TYPE azure,
+    PROVIDER credential_chain,
+    CHAIN 'cli'
+);
+
+INSTALL pbi_scanner FROM community;
+LOAD pbi_scanner;
+
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;Secret=pbi_cli;',
+    'EVALUATE ROW("probe_ok", 1)'
+);
+```
+
 ## Connection Configuration
 
 ### Connection String Forms
@@ -91,6 +115,15 @@ Use the direct XMLA form when you already have a resolved target and want to byp
 - `auth_mode := 'azure_cli'`
 - `auth_mode := 'access_token'`
 - `auth_mode := 'service_principal'`
+
+You can also configure a session default once:
+
+```sql
+SET pbi_scanner_auth_mode = 'azure_cli';
+```
+
+When both are provided, per-call named `auth_mode := ...` overrides the session
+`SET` value for that call.
 
 For interactive SQL sessions, the recommended path is DuckDB secret-based auth with DuckDB's Azure extension.
 

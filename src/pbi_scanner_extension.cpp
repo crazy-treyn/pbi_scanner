@@ -10,12 +10,32 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/main/database.hpp"
 #include "duckdb/common/vector_operations/binary_executor.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 
 #include <string>
 
 namespace duckdb {
+
+static void SetPbiScannerAuthMode(ClientContext &context, SetScope scope,
+                                  Value &parameter) {
+  auto value = StringUtil::Lower(Trimmed(parameter.ToString()));
+  if (value.empty()) {
+    parameter = Value("");
+    return;
+  }
+  if (value == "cli") {
+    parameter = Value("azure_cli");
+    return;
+  }
+  if (value == "azure_cli" || value == "access_token" ||
+      value == "service_principal") {
+    parameter = Value(value);
+    return;
+  }
+  throw InvalidInputException("unsupported auth_mode \"%s\"", value);
+}
 
 static std::string DecodeHex(const std::string &hex) {
   if (hex.size() % 2 != 0) {
@@ -178,6 +198,13 @@ static void EffectiveExecutionTransportTestFunction(DataChunk &args,
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
+  auto &config = loader.GetDatabaseInstance().config;
+  config.AddExtensionOption(
+      "pbi_scanner_auth_mode",
+      "Default auth mode for pbi_scanner table functions "
+      "(access_token, azure_cli, service_principal)",
+      LogicalType::VARCHAR, Value(""), SetPbiScannerAuthMode);
+
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());
   loader.RegisterFunction(CreatePbiColumnsFunction());

@@ -11,9 +11,11 @@ Configuration matches query_semantic_model_minimal.py where possible:
   PBI_BENCH_CONNECTION_STRING
   PBI_BENCH_DAX
   PBI_BENCH_SECRET_NAME
+  PBI_SQL_AUTH_MODE              (default: azure_cli; also accepts cli)
+  PBI_SQL_USE_AZURE_SECRET=0|1   (default: 0; set 1 to use secret_name auth)
   PBI_SQL_MODE=count|sample|all   (default: sample)
   PBI_SQL_LIMIT=<n>               (default: 100 for sample mode)
-    PBI_SQL_INSTALL_AZURE=0|1        (default: 1; set 0 after first install)
+  PBI_SQL_INSTALL_AZURE=0|1      (default: 1; only used when secret mode is on)
 """
 
 from __future__ import annotations
@@ -74,6 +76,23 @@ def _bench_config() -> tuple[str, str, str]:
     return connection_string, dax, secret_name or "pbi_cli"
 
 
+def _auth_mode() -> str:
+    configured = (
+        os.environ.get("PBI_SQL_AUTH_MODE", "").strip()
+        or os.environ.get("PBI_BENCH_AUTH_MODE", "").strip()
+        or "azure_cli"
+    )
+    normalized = configured.lower()
+    if normalized == "cli":
+        return "azure_cli"
+    if normalized in {"azure_cli", "access_token", "service_principal"}:
+        return normalized
+    raise ValueError(
+        "PBI_SQL_AUTH_MODE must be one of azure_cli, access_token, "
+        "service_principal, or cli"
+    )
+
+
 def _quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
@@ -91,14 +110,24 @@ def _truthy_env(name: str, default: str = "") -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _result_sql(connection_string: str, dax: str, secret_name: str) -> str:
-    source = (
-        "dax_query("
-        f"'{escape_sql_literal(connection_string)}', "
-        f"'{escape_sql_literal(dax)}', "
-        f"secret_name := '{escape_sql_literal(secret_name)}'"
-        ")"
-    )
+def _result_sql(
+    connection_string: str, dax: str, secret_name: str, use_secret_auth: bool
+) -> str:
+    if use_secret_auth:
+        source = (
+            "dax_query("
+            f"'{escape_sql_literal(connection_string)}', "
+            f"'{escape_sql_literal(dax)}', "
+            f"secret_name := '{escape_sql_literal(secret_name)}'"
+            ")"
+        )
+    else:
+        source = (
+            "dax_query("
+            f"'{escape_sql_literal(connection_string)}', "
+            f"'{escape_sql_literal(dax)}'"
+            ")"
+        )
     mode = os.environ.get("PBI_SQL_MODE", "sample").strip().lower() or "sample"
     if mode == "count":
         return f"SELECT count(*) AS total_rows FROM {source}"
@@ -113,16 +142,23 @@ def _build_sql(
     extension_path: Path, connection_string: str, dax: str, secret_name: str
 ) -> str:
     statements = [f"LOAD '{escape_sql_literal(str(extension_path))}'"]
-    if _truthy_env("PBI_SQL_INSTALL_AZURE", "1"):
-        statements.append("INSTALL azure")
+    use_secret_auth = _truthy_env("PBI_SQL_USE_AZURE_SECRET", "0")
+    if use_secret_auth:
+        if _truthy_env("PBI_SQL_INSTALL_AZURE", "1"):
+            statements.append("INSTALL azure")
+        statements.extend(
+            [
+                "LOAD azure",
+                (
+                    f"CREATE OR REPLACE SECRET {_quote_identifier(secret_name)} "
+                    "(TYPE azure, PROVIDER credential_chain, CHAIN 'cli')"
+                ),
+            ]
+        )
     statements.extend(
         [
-            "LOAD azure",
-            (
-                f"CREATE OR REPLACE SECRET {_quote_identifier(secret_name)} "
-                "(TYPE azure, PROVIDER credential_chain, CHAIN 'cli')"
-            ),
-            _result_sql(connection_string, dax, secret_name),
+            f"SET pbi_scanner_auth_mode = '{escape_sql_literal(_auth_mode())}'",
+            _result_sql(connection_string, dax, secret_name, use_secret_auth),
         ]
     )
     return ";\n".join(statements) + ";\n"
@@ -143,6 +179,8 @@ def main() -> None:
     print(
         "[sql-minimal] running DuckDB CLI SQL smoke "
         f"mode={os.environ.get('PBI_SQL_MODE', 'sample') or 'sample'} "
+        f"auth_mode={_auth_mode()} "
+        f"use_azure_secret={1 if _truthy_env('PBI_SQL_USE_AZURE_SECRET', '0') else 0} "
         f"install_azure={1 if _truthy_env('PBI_SQL_INSTALL_AZURE', '1') else 0} "
         f"secret={secret_name}"
     )
