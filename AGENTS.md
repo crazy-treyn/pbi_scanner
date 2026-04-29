@@ -114,6 +114,35 @@
 - Use `repo.ref_next` only for future-release compatibility when DuckDB `main` needs a different commit than latest stable.
 - Include validation evidence in the community PR description: stable CI, next CI if available, local build/test commands, and known platform exclusions.
 
+## Extension Version Bump Runbook
+
+- Treat extension version bumps as release-management changes that must keep local metadata, GitHub release tags, and community descriptor references in sync.
+- Version format convention:
+	- Use numeric semver for metadata fields (for example `0.0.1`).
+	- Use `v`-prefixed tags/releases in GitHub (for example `v0.0.1`).
+- Update these files/fields together for each bump:
+	- `extension_config.cmake`: set `EXTENSION_VERSION` to the new numeric semver.
+	- `duckdb/community-extensions` descriptor (`extensions/pbi_scanner/description.yml`): set `extension.version` to the same numeric semver.
+	- `duckdb/community-extensions` descriptor: set `repo.ref` to the validated release commit SHA from this repository.
+	- Optional: use `repo.ref_next` only when future DuckDB compatibility requires a different commit than stable.
+- Preferred command sequence for a release bump (from this repo root):
+	- `git status --short --branch`
+	- `rg "EXTENSION_VERSION|0\\.0\\.1|v0\\.0\\.1" extension_config.cmake README.md .github/workflows/MainDistributionPipeline.yml AGENTS.md`
+	- `make format-check`
+	- `make release`
+	- `./build/release/test/unittest "test/sql/pbi_scanner.test"`
+	- `git add extension_config.cmake AGENTS.md README.md .github/workflows/MainDistributionPipeline.yml`
+	- `git commit -m "<release prep message>"`
+	- `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+	- `git push origin HEAD --tags`
+	- `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<release notes>"`
+- Verification checklist before publishing the community descriptor update:
+	- Release tag exists remotely and points to the intended commit.
+	- GitHub release exists for the same tag.
+	- Community descriptor `extension.version` matches numeric semver.
+	- Community descriptor `repo.ref` equals the exact release commit SHA.
+	- Community PR body includes validation evidence (build/tests plus relevant refs).
+
 ## Test Commands
 
 - **CI expectation:** tests under `test/sql/` are deterministic and offline (no live Power BI). `make test` exercises those.
