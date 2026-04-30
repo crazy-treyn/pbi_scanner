@@ -90,6 +90,28 @@ static void ParseBinXmlDoubleTestFunction(DataChunk &args,
       });
 }
 
+static void ParseStreamingSxDoubleTestFunction(DataChunk &args,
+                                               ExpressionState &state,
+                                               Vector &result) {
+  BinaryExecutor::Execute<string_t, int64_t, double>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t input, int64_t chunk_size) {
+        if (chunk_size <= 0) {
+          throw InvalidInputException("chunk_size must be greater than zero");
+        }
+        auto parsed = ParseStreamingSxRowsForTesting(
+            DecodeHex(input.GetString()), static_cast<idx_t>(chunk_size));
+        if (!parsed.fault_message.empty()) {
+          throw InvalidInputException(parsed.fault_message);
+        }
+        if (parsed.rows.size() != 1 || parsed.rows[0].size() != 1) {
+          throw InvalidInputException(
+              "expected exactly one parsed streaming SX row with one column");
+        }
+        return parsed.rows[0][0].GetValueUnsafe<double>();
+      });
+}
+
 static void ParseBinXmlFirstTextTestFunction(DataChunk &args,
                                              ExpressionState &state,
                                              Vector &result) {
@@ -217,6 +239,10 @@ static void LoadInternal(ExtensionLoader &loader) {
   loader.RegisterFunction(ScalarFunction(
       "__pbi_scanner_test_parse_binxml_double", {LogicalType::VARCHAR},
       LogicalType::DOUBLE, ParseBinXmlDoubleTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_parse_streaming_sx_double",
+                     {LogicalType::VARCHAR, LogicalType::BIGINT},
+                     LogicalType::DOUBLE, ParseStreamingSxDoubleTestFunction));
   loader.RegisterFunction(ScalarFunction(
       "__pbi_scanner_test_parse_binxml_first_text", {LogicalType::VARCHAR},
       LogicalType::VARCHAR, ParseBinXmlFirstTextTestFunction));

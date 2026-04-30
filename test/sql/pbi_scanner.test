@@ -48,6 +48,22 @@ SELECT length(__pbi_scanner_test_parse_binxml_first_text(
 4
 
 query I
+SELECT __pbi_scanner_test_parse_streaming_sx_double(
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803040000000000205c40f7f7f7',
+    1
+);
+----
+112.5
+
+query I
+SELECT __pbi_scanner_test_parse_streaming_sx_double(
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803040000000000205c40f7f7f7',
+    7
+);
+----
+112.5
+
+query I
 SELECT CAST(__pbi_scanner_test_metadata_cache_roundtrip() AS INTEGER);
 ----
 1

@@ -13,12 +13,16 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 
 namespace duckdb {
@@ -342,6 +346,71 @@ static std::string DecompressXpressLz77Framed(const std::string &compressed) {
   }
   return output;
 }
+
+class XpressLz77FrameStream {
+public:
+  bool
+  Feed(const_data_ptr_t data, idx_t size,
+       const std::function<bool(const_data_ptr_t, idx_t)> &on_decompressed) {
+    buffer.append(reinterpret_cast<const char *>(data), size);
+    idx_t offset = 0;
+    while (buffer.size() - offset >= FRAME_HEADER_SIZE) {
+      auto input = const_data_ptr_cast(buffer.data());
+      auto original_size = ReadLittleEndian32(input, buffer.size(), offset);
+      auto compressed_size =
+          ReadLittleEndian32(input, buffer.size(), offset + 4);
+      if (original_size > 65535 || compressed_size > 65535) {
+        throw IOException("XPRESS block sizes must not exceed 65535 bytes");
+      }
+      auto frame_size = FRAME_HEADER_SIZE + static_cast<idx_t>(compressed_size);
+      if (buffer.size() - offset < frame_size) {
+        break;
+      }
+
+      std::string output;
+      output.reserve(original_size);
+      auto frame_payload = input + offset + FRAME_HEADER_SIZE;
+      if (original_size == compressed_size) {
+        output.append(reinterpret_cast<const char *>(frame_payload),
+                      compressed_size);
+      } else {
+        DecompressXpressLz77Block(frame_payload, compressed_size, output,
+                                  original_size);
+      }
+      offset += frame_size;
+      decompressed_bytes += output.size();
+      if (!output.empty() &&
+          !on_decompressed(const_data_ptr_cast(output.data()), output.size())) {
+        Compact(offset);
+        return false;
+      }
+    }
+    Compact(offset);
+    return true;
+  }
+
+  void Finish() const {
+    if (!buffer.empty()) {
+      throw IOException("XPRESS payload ended unexpectedly");
+    }
+  }
+
+  idx_t BufferedBytes() const { return buffer.size(); }
+  idx_t DecompressedBytes() const { return decompressed_bytes; }
+
+private:
+  static constexpr idx_t FRAME_HEADER_SIZE = 8;
+
+  void Compact(idx_t offset) {
+    if (offset == 0) {
+      return;
+    }
+    buffer.erase(0, offset);
+  }
+
+  std::string buffer;
+  idx_t decompressed_bytes = 0;
+};
 
 static bool TryParseInt64(const std::string &value, int64_t &result) {
   if (value.empty()) {
@@ -2515,45 +2584,49 @@ private:
 class SsasFastRowParser {
 public:
   SsasFastRowParser(
+      const std::vector<XmlaColumn> &columns_p,
+      const std::function<bool(const std::vector<Value> &row)> &on_row_p,
+      const std::function<bool()> &should_stop_p)
+      : columns(columns_p), on_row(on_row_p), should_stop(should_stop_p),
+        streaming(true) {
+    InitializeColumnIndexes();
+  }
+
+  SsasFastRowParser(
       const_data_ptr_t data_p, idx_t size_p,
       const std::vector<XmlaColumn> &columns_p,
       const std::function<bool(const std::vector<Value> &row)> &on_row_p,
       const std::function<bool()> &should_stop_p)
       : data(data_p), size(size_p), columns(columns_p), on_row(on_row_p),
         should_stop(should_stop_p) {
-    auto *debug_value = std::getenv("PBI_SCANNER_DEBUG_SSAS_MEASURES");
-    debug_trace_enabled = debug_value && *debug_value;
-    for (idx_t i = 0; i < columns.size(); i++) {
-      column_indexes[columns[i].name] = i;
-      column_indexes_lower[StringUtil::Lower(columns[i].name)] = i;
-    }
+    InitializeColumnIndexes();
   }
 
-  void ParseDocument() {
-    if (PeekByte() == 0xDF) {
-      ReadByte();
-      ReadVarUInt();
-    }
-    if (PeekByte() == 0xB0) {
-      ReadByte();
-      ReadByte();
-    }
-    while (offset < size && !stopped_early) {
-      if (should_stop && should_stop()) {
-        stopped_early = true;
-        return;
-      }
-      ParseRecord();
-    }
-    FlushPendingStart();
+  void ParseDocument() { ParseAvailable(true); }
+
+  bool Feed(const_data_ptr_t data_p, idx_t size_p) {
+    owned_data.append(reinterpret_cast<const char *>(data_p), size_p);
+    data = const_data_ptr_cast(owned_data.data());
+    size = owned_data.size();
+    ParseAvailable(false);
+    CompactOwnedData();
+    return !stopped_early;
+  }
+
+  void Finish() {
+    ParseAvailable(true);
+    CompactOwnedData();
   }
 
   idx_t ProducedRows() const { return produced_rows; }
 
 private:
+  class NeedMoreInputException {};
+
   enum class ElementKind : uint8_t { OTHER, SCHEMA, ROW };
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
   static constexpr idx_t CELL_TRACE_LIMIT = 80;
+  static constexpr idx_t STREAMING_CHECKPOINT_THRESHOLD = 512;
 
   struct ExpandedName {
     std::string prefix;
@@ -2566,6 +2639,134 @@ private:
     uint32_t name_id;
     ElementKind kind;
   };
+
+  struct ParserState {
+    idx_t offset;
+    std::vector<std::string> strings;
+    std::vector<ExpandedName> names;
+    std::unordered_map<uint32_t, ExpandedName> names_by_id;
+    std::unordered_map<std::string, idx_t> runtime_cell_indexes;
+    std::vector<StackEntry> stack;
+    std::vector<Value> current_row;
+    idx_t inside_schema;
+    idx_t runtime_column_count;
+    idx_t produced_rows;
+    idx_t cell_trace_count;
+    uint32_t pending_name_id;
+    bool pending_start;
+    bool stopped_early;
+    bool normalized_preamble;
+  };
+
+  void InitializeColumnIndexes() {
+    auto *debug_value = std::getenv("PBI_SCANNER_DEBUG_SSAS_MEASURES");
+    debug_trace_enabled = debug_value && *debug_value;
+    for (idx_t i = 0; i < columns.size(); i++) {
+      column_indexes[columns[i].name] = i;
+      column_indexes_lower[StringUtil::Lower(columns[i].name)] = i;
+    }
+  }
+
+  ParserState CaptureState() const {
+    return ParserState{offset,
+                       strings,
+                       names,
+                       names_by_id,
+                       runtime_cell_indexes,
+                       stack,
+                       current_row,
+                       inside_schema,
+                       runtime_column_count,
+                       produced_rows,
+                       cell_trace_count,
+                       pending_name_id,
+                       pending_start,
+                       stopped_early,
+                       normalized_preamble};
+  }
+
+  void RestoreState(const ParserState &state) {
+    offset = state.offset;
+    strings = state.strings;
+    names = state.names;
+    names_by_id = state.names_by_id;
+    runtime_cell_indexes = state.runtime_cell_indexes;
+    stack = state.stack;
+    current_row = state.current_row;
+    inside_schema = state.inside_schema;
+    runtime_column_count = state.runtime_column_count;
+    produced_rows = state.produced_rows;
+    cell_trace_count = state.cell_trace_count;
+    pending_name_id = state.pending_name_id;
+    pending_start = state.pending_start;
+    stopped_early = state.stopped_early;
+    normalized_preamble = state.normalized_preamble;
+  }
+
+  void ParseAvailable(bool final) {
+    if (!normalized_preamble && (PeekByte() == 0xDF || PeekByte() == 0xB0)) {
+      auto state = streaming ? CaptureState() : ParserState();
+      try {
+        if (PeekByte() == 0xDF) {
+          ReadByte();
+          ReadVarUInt();
+          if (streaming && !final && offset >= size) {
+            throw NeedMoreInputException();
+          }
+        }
+        if (PeekByte() == 0xB0) {
+          ReadByte();
+          ReadByte();
+        }
+        normalized_preamble = true;
+      } catch (const NeedMoreInputException &) {
+        if (!streaming || final) {
+          Fail("payload ended unexpectedly");
+        }
+        RestoreState(state);
+        return;
+      }
+    } else {
+      normalized_preamble = true;
+    }
+    while (offset < size && !stopped_early) {
+      if (should_stop && should_stop()) {
+        stopped_early = true;
+        return;
+      }
+      auto checkpoint =
+          streaming && size - offset < STREAMING_CHECKPOINT_THRESHOLD;
+      auto state = checkpoint ? CaptureState() : ParserState();
+      try {
+        ParseRecord();
+      } catch (const NeedMoreInputException &) {
+        if (!streaming || final) {
+          Fail("payload ended unexpectedly");
+        }
+        if (!checkpoint) {
+          Fail("streaming record exceeded checkpoint window");
+        }
+        RestoreState(state);
+        return;
+      }
+    }
+    if (final) {
+      FlushPendingStart();
+    }
+  }
+
+  void CompactOwnedData() {
+    constexpr idx_t COMPACT_THRESHOLD = 1024 * 1024;
+    if (!streaming || offset == 0) {
+      return;
+    }
+    if (offset >= COMPACT_THRESHOLD || offset * 2 > owned_data.size()) {
+      owned_data.erase(0, offset);
+      offset = 0;
+      data = const_data_ptr_cast(owned_data.data());
+      size = owned_data.size();
+    }
+  }
 
   [[noreturn]] void Fail(const char *message) const {
     throw IOException("SSAS fast row parser %s at offset %llu", message,
@@ -2580,6 +2781,9 @@ private:
 
   void Ensure(idx_t bytes) const {
     if (offset + bytes > size) {
+      if (streaming) {
+        throw NeedMoreInputException();
+      }
       Fail("payload ended unexpectedly");
     }
   }
@@ -3300,7 +3504,10 @@ private:
   uint32_t pending_name_id = 0;
   bool pending_start = false;
   bool stopped_early = false;
+  bool normalized_preamble = false;
   bool debug_trace_enabled = false;
+  bool streaming = false;
+  std::string owned_data;
 };
 
 static HttpHeaders XmlaHeaders(const std::string &access_token,
@@ -3450,6 +3657,15 @@ static bool TryParseSsasRowsFast(
 
 static bool EnableSsasFastRowParser() {
   auto *raw_value = std::getenv("PBI_SCANNER_ENABLE_SSAS_FAST_ROWS");
+  if (!raw_value || !*raw_value) {
+    return false;
+  }
+  auto value = StringUtil::Lower(Trimmed(raw_value));
+  return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+static bool EnableStreamingSxParser() {
+  auto *raw_value = std::getenv("PBI_SCANNER_ENABLE_STREAMING_SX");
   if (!raw_value || !*raw_value) {
     return false;
   }
@@ -3797,6 +4013,39 @@ XmlaParseTestResult ParseBinXmlForTesting(const std::string &payload,
   return result;
 }
 
+XmlaParseTestResult ParseStreamingSxRowsForTesting(const std::string &payload,
+                                                   idx_t chunk_size) {
+  XmlaParseTestResult result;
+  if (chunk_size == 0) {
+    throw InvalidInputException("chunk_size must be greater than zero");
+  }
+  XmlaColumn column;
+  column.name = "Rate";
+  column.source_type = "xsd:double";
+  column.duckdb_type = LogicalType::DOUBLE;
+  column.coercion_kind = XmlaCoercionKind::DOUBLE;
+  result.columns.push_back(column);
+
+  SsasFastRowParser parser(
+      result.columns,
+      [&](const std::vector<Value> &row) {
+        result.rows.push_back(row);
+        return true;
+      },
+      nullptr);
+  for (idx_t offset = 0; offset < payload.size(); offset += chunk_size) {
+    auto remaining = payload.size() - offset;
+    auto current_size = MinValue<idx_t>(chunk_size, remaining);
+    if (!parser.Feed(const_data_ptr_cast(payload.data() + offset),
+                     current_size)) {
+      break;
+    }
+  }
+  parser.Finish();
+  result.stopped_early = false;
+  return result;
+}
+
 XmlaExecutor::XmlaExecutor(int64_t timeout_ms_p)
     : XmlaExecutor(timeout_ms_p, nullptr) {}
 
@@ -3853,15 +4102,99 @@ void XmlaExecutor::ExecuteStreaming(
   auto envelope = BuildXmlaExecuteEnvelope(request.catalog, request.statement,
                                            request.effective_user_name);
   auto transport_mode = ResolveXmlaTransportMode();
-  auto buffer_response = transport_mode != XmlaTransportMode::PLAIN;
+  auto streaming_sx_response = EnableStreamingSxParser() &&
+                               EnableSsasFastRowParser() && known_columns &&
+                               (transport_mode == XmlaTransportMode::SX ||
+                                transport_mode == XmlaTransportMode::SX_XPRESS);
+  auto buffer_response =
+      transport_mode != XmlaTransportMode::PLAIN && !streaming_sx_response;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row, known_columns);
+  unique_ptr<SsasFastRowParser> streaming_parser;
+  std::mutex stream_lock;
+  std::condition_variable stream_cv;
+  std::deque<std::string> stream_blocks;
+  std::thread stream_parser_thread;
+  std::string stream_error;
+  bool stream_done = false;
+  static constexpr idx_t MAX_STREAM_BLOCKS = 64;
+  if (streaming_sx_response) {
+    streaming_parser =
+        make_uniq<SsasFastRowParser>(*known_columns, on_row, should_stop);
+    stream_parser_thread = std::thread([&]() {
+      try {
+        while (true) {
+          std::string block;
+          {
+            std::unique_lock<std::mutex> guard(stream_lock);
+            stream_cv.wait(guard, [&]() {
+              return stream_done || !stream_blocks.empty() ||
+                     (should_stop && should_stop());
+            });
+            if ((should_stop && should_stop()) ||
+                (!stream_error.empty() && stream_blocks.empty())) {
+              return;
+            }
+            if (stream_blocks.empty()) {
+              break;
+            }
+            block = std::move(stream_blocks.front());
+            stream_blocks.pop_front();
+          }
+          stream_cv.notify_all();
+          if (!streaming_parser->Feed(const_data_ptr_cast(block.data()),
+                                      block.size())) {
+            return;
+          }
+        }
+        streaming_parser->Finish();
+      } catch (const Exception &ex) {
+        std::lock_guard<std::mutex> guard(stream_lock);
+        stream_error = ex.what();
+      } catch (const std::exception &ex) {
+        std::lock_guard<std::mutex> guard(stream_lock);
+        stream_error = ex.what();
+      }
+      stream_cv.notify_all();
+    });
+  }
+  XpressLz77FrameStream xpress_stream;
+  auto push_stream_block = [&](const_data_ptr_t data, idx_t data_length) {
+    if (data_length == 0) {
+      return true;
+    }
+    std::string block(reinterpret_cast<const char *>(data), data_length);
+    std::unique_lock<std::mutex> guard(stream_lock);
+    stream_cv.wait(guard, [&]() {
+      return stream_blocks.size() < MAX_STREAM_BLOCKS ||
+             !stream_error.empty() || (should_stop && should_stop());
+    });
+    if (!stream_error.empty() || (should_stop && should_stop())) {
+      return false;
+    }
+    stream_blocks.push_back(std::move(block));
+    guard.unlock();
+    stream_cv.notify_all();
+    return true;
+  };
   auto response = http->PostStream(
       request.url, XmlaHeaders(request.access_token, transport_mode), envelope,
       "text/xml",
       [&](const_data_ptr_t data, idx_t data_length) {
         if (should_stop && should_stop()) {
           return false;
+        }
+        if (streaming_sx_response) {
+          if (transport_mode == XmlaTransportMode::SX_XPRESS) {
+            return xpress_stream.Feed(data, data_length,
+                                      [&](const_data_ptr_t decompressed_data,
+                                          idx_t decompressed_length) {
+                                        return push_stream_block(
+                                            decompressed_data,
+                                            decompressed_length);
+                                      });
+          }
+          return push_stream_block(data, data_length);
         }
         if (buffer_response) {
           buffered_response.append(reinterpret_cast<const char *>(data),
@@ -3871,7 +4204,38 @@ void XmlaExecutor::ExecuteStreaming(
         return parser.Feed(data, data_length);
       },
       true);
-  bool decoded_response = false;
+  bool decoded_response = streaming_sx_response;
+  if (streaming_sx_response) {
+    if (!(should_stop && should_stop()) && !response.HasRequestError() &&
+        transport_mode == XmlaTransportMode::SX_XPRESS) {
+      try {
+        xpress_stream.Finish();
+      } catch (const Exception &ex) {
+        std::lock_guard<std::mutex> guard(stream_lock);
+        stream_error = ex.what();
+      }
+    }
+    {
+      std::lock_guard<std::mutex> guard(stream_lock);
+      stream_done = true;
+    }
+    stream_cv.notify_all();
+    if (stream_parser_thread.joinable()) {
+      stream_parser_thread.join();
+    }
+    if (!stream_error.empty()) {
+      throw IOException("%s", stream_error.c_str());
+    }
+    if (DebugTimingsEnabled()) {
+      std::fprintf(
+          stderr,
+          "[pbi_scanner] SX streaming execution rows: %llu "
+          "(decompressed %llu bytes, pending compressed %llu bytes)\n",
+          static_cast<unsigned long long>(streaming_parser->ProducedRows()),
+          static_cast<unsigned long long>(xpress_stream.DecompressedBytes()),
+          static_cast<unsigned long long>(xpress_stream.BufferedBytes()));
+    }
+  }
   if (buffer_response && !(should_stop && should_stop())) {
     try {
       decoded_response = DecodeBufferedXmlaResponse(
