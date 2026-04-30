@@ -100,7 +100,7 @@ static int DecodeBase64UrlChar(char value) {
 
 static bool DecodeBase64Url(const string &input, string &output) {
   output.clear();
-  int value = 0;
+  uint32_t value = 0;
   int bits = -8;
   for (auto ch : input) {
     if (ch == '=') {
@@ -114,6 +114,7 @@ static bool DecodeBase64Url(const string &input, string &output) {
     bits += 6;
     if (bits >= 0) {
       output.push_back(static_cast<char>((value >> bits) & 0xFF));
+      value &= (1U << bits) - 1;
       bits -= 8;
     }
   }
