@@ -13,9 +13,14 @@
 
 #include "yyjson.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <functional>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 #ifdef _WIN32
 #define PBI_XMLA_POPEN _popen
@@ -43,6 +48,160 @@ struct ServicePrincipalCredentials {
     return !tenant_id.empty() && !client_id.empty() && !client_secret.empty();
   }
 };
+
+struct CachedAccessToken {
+  CachedAccessToken() = default;
+  CachedAccessToken(string token_p, int64_t refresh_after_unix_seconds_p)
+      : token(std::move(token_p)),
+        refresh_after_unix_seconds(refresh_after_unix_seconds_p) {}
+
+  string token;
+  int64_t refresh_after_unix_seconds = 0;
+};
+
+static constexpr int64_t TOKEN_CACHE_EXPIRY_SKEW_SECONDS = 5 * 60;
+
+std::mutex token_cache_lock;
+std::unordered_map<string, CachedAccessToken> token_cache;
+
+static int64_t CurrentUnixSeconds() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+static string HashSensitiveValue(const string &value) {
+  uint64_t hash = 1469598103934665603ULL;
+  for (auto ch : value) {
+    hash ^= static_cast<uint8_t>(ch);
+    hash *= 1099511628211ULL;
+  }
+  return std::to_string(hash);
+}
+
+static int DecodeBase64UrlChar(char value) {
+  if (value >= 'A' && value <= 'Z') {
+    return value - 'A';
+  }
+  if (value >= 'a' && value <= 'z') {
+    return value - 'a' + 26;
+  }
+  if (value >= '0' && value <= '9') {
+    return value - '0' + 52;
+  }
+  if (value == '-' || value == '+') {
+    return 62;
+  }
+  if (value == '_' || value == '/') {
+    return 63;
+  }
+  return -1;
+}
+
+static bool DecodeBase64Url(const string &input, string &output) {
+  output.clear();
+  int value = 0;
+  int bits = -8;
+  for (auto ch : input) {
+    if (ch == '=') {
+      break;
+    }
+    auto decoded = DecodeBase64UrlChar(ch);
+    if (decoded < 0) {
+      return false;
+    }
+    value = (value << 6) | decoded;
+    bits += 6;
+    if (bits >= 0) {
+      output.push_back(static_cast<char>((value >> bits) & 0xFF));
+      bits -= 8;
+    }
+  }
+  return true;
+}
+
+static int64_t ExtractJwtExpiryUnixSeconds(const string &token) {
+  auto first_dot = token.find('.');
+  if (first_dot == string::npos) {
+    return 0;
+  }
+  auto second_dot = token.find('.', first_dot + 1);
+  if (second_dot == string::npos || second_dot == first_dot + 1) {
+    return 0;
+  }
+  string payload;
+  if (!DecodeBase64Url(token.substr(first_dot + 1, second_dot - first_dot - 1),
+                       payload)) {
+    return 0;
+  }
+  auto *document =
+      yyjson_read(payload.c_str(), payload.size(), YYJSON_READ_NOFLAG);
+  if (!document) {
+    return 0;
+  }
+  std::unique_ptr<yyjson_doc, void (*)(yyjson_doc *)> doc_holder(
+      document, yyjson_doc_free);
+  auto *root = yyjson_doc_get_root(document);
+  if (!root || !yyjson_is_obj(root)) {
+    return 0;
+  }
+  auto *exp = yyjson_obj_get(root, "exp");
+  if (!exp || !yyjson_is_num(exp)) {
+    return 0;
+  }
+  return yyjson_get_sint(exp);
+}
+
+static bool TryGetCachedAccessToken(const string &cache_key, string &token) {
+  std::lock_guard<std::mutex> guard(token_cache_lock);
+  auto entry = token_cache.find(cache_key);
+  if (entry == token_cache.end()) {
+    return false;
+  }
+  if (entry->second.refresh_after_unix_seconds <= CurrentUnixSeconds()) {
+    token_cache.erase(entry);
+    return false;
+  }
+  token = entry->second.token;
+  if (DebugTimingsEnabled()) {
+    std::fprintf(stderr, "[pbi_scanner] auth token cache hit\n");
+  }
+  return true;
+}
+
+static void StoreCachedAccessToken(const string &cache_key,
+                                   const string &token) {
+  auto expires_at = ExtractJwtExpiryUnixSeconds(token);
+  auto refresh_after = expires_at - TOKEN_CACHE_EXPIRY_SKEW_SECONDS;
+  if (expires_at <= 0 || refresh_after <= CurrentUnixSeconds()) {
+    return;
+  }
+  std::lock_guard<std::mutex> guard(token_cache_lock);
+  token_cache[cache_key] = CachedAccessToken{token, refresh_after};
+}
+
+static string ResolveCachedAccessToken(const string &cache_key,
+                                       const std::function<string()> &acquire) {
+  string token;
+  if (TryGetCachedAccessToken(cache_key, token)) {
+    return token;
+  }
+  token = acquire();
+  StoreCachedAccessToken(cache_key, token);
+  return token;
+}
+
+static string
+ServicePrincipalCacheKey(const string &prefix,
+                         const ServicePrincipalCredentials &credentials) {
+  return prefix + "|tenant=" + credentials.tenant_id +
+         "|client=" + credentials.client_id +
+         "|secret_hash=" + HashSensitiveValue(credentials.client_secret);
+}
+
+static string ResolveAzureCliModeUncached();
+static string AcquireServicePrincipalTokenUncached(
+    const ServicePrincipalCredentials &credentials);
 
 static string
 GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
@@ -147,6 +306,11 @@ ResolveAccessTokenMode(const named_parameter_map_t &named_parameters) {
 }
 
 static string ResolveAzureCliMode() {
+  return ResolveCachedAccessToken(
+      "azure_cli", []() { return ResolveAzureCliModeUncached(); });
+}
+
+static string ResolveAzureCliModeUncached() {
 #ifdef _WIN32
   static constexpr const char *stderr_redirection = " 2>NUL";
 #else
@@ -252,6 +416,14 @@ static string GetRequiredJSONString(yyjson_val *object, const char *key,
 
 static string
 AcquireServicePrincipalToken(const ServicePrincipalCredentials &credentials) {
+  auto cache_key = ServicePrincipalCacheKey("service_principal", credentials);
+  return ResolveCachedAccessToken(cache_key, [&]() {
+    return AcquireServicePrincipalTokenUncached(credentials);
+  });
+}
+
+static string AcquireServicePrincipalTokenUncached(
+    const ServicePrincipalCredentials &credentials) {
   HttpClient client(300000);
   auto url = string("https://login.microsoftonline.com/") +
              credentials.tenant_id + "/oauth2/v2.0/token";
