@@ -3495,8 +3495,8 @@ private:
   idx_t size;
   idx_t offset = 0;
   const std::vector<XmlaColumn> &columns;
-  const std::function<bool(const std::vector<Value> &row)> &on_row;
-  const std::function<bool()> &should_stop;
+  std::function<bool(const std::vector<Value> &row)> on_row;
+  std::function<bool()> should_stop;
   std::vector<std::string> strings;
   std::vector<ExpandedName> names;
   std::unordered_map<uint32_t, ExpandedName> names_by_id;
