@@ -3438,9 +3438,17 @@ private:
     case 0x01: {
       uint32_t maybe_name_id = 0;
       idx_t next_offset = offset;
-      if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
-          (names_by_id.find(maybe_name_id) != names_by_id.end() ||
-           (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
+      auto has_name_id =
+          TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset);
+      if (!has_name_id) {
+        if (streaming) {
+          throw NeedMoreInputException();
+        }
+        FlushPendingStart();
+        return;
+      }
+      if (names_by_id.find(maybe_name_id) != names_by_id.end() ||
+          (maybe_name_id >= 1 && maybe_name_id <= names.size())) {
         ParseStartElement();
         return;
       }
