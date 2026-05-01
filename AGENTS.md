@@ -63,6 +63,19 @@
 - `CMAKE_BUILD_PARALLEL_LEVEL=4 GEN=ninja make`: bounded parallel Ninja build.
 - `make clean`: removes local build outputs.
 
+### Windows Native Build Fallback (when `make` is unavailable)
+
+- Preferred native path: use the wrapper from repo root:
+  - `.\scripts\dev-win.ps1 configure`
+  - `.\scripts\dev-win.ps1 build`
+  - `.\scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test`
+- The wrapper automatically:
+  - Locates and invokes `VsDevCmd.bat` (VS 2022 Build Tools first, then VS 2019 Build Tools).
+  - Resolves `cmake.exe` from `PATH` or known Visual Studio Build Tools paths.
+  - Applies repo-safe configure defaults (`CMAKE_IGNORE_PATH`, `OPENSSL_ROOT_DIR`, `ZLIB_INCLUDE_DIR`, `ZLIB_LIBRARY`) with env-var override support.
+  - Uses serialized MSBuild (`-- /m:1`) to reduce file-lock issues.
+- Optional launcher: `scripts\dev-win.cmd <subcommand>`.
+
 ## DuckDB Version Bump Workflow
 
 - Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
@@ -113,7 +126,7 @@
   - `extension.license: MIT`
   - `extension.maintainers`: confirm final GitHub handle(s) before publishing.
   - `extension.excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"`
-  - `repo.github: crazy-treyn/pbi_scanner`
+  - `repo.github: <your-org>/pbi_scanner`
   - `repo.ref`: validated current release commit SHA.
 - Use `repo.ref_next` only for future-release compatibility when DuckDB `main` needs a different commit than latest stable.
 - Include validation evidence in the community PR description: stable CI, next CI if available, local build/test commands, and known platform exclusions.

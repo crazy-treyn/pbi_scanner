@@ -3438,9 +3438,17 @@ private:
     case 0x01: {
       uint32_t maybe_name_id = 0;
       idx_t next_offset = offset;
-      if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
-          (names_by_id.find(maybe_name_id) != names_by_id.end() ||
-           (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
+      auto has_name_id =
+          TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset);
+      if (!has_name_id) {
+        if (streaming) {
+          throw NeedMoreInputException();
+        }
+        FlushPendingStart();
+        return;
+      }
+      if (names_by_id.find(maybe_name_id) != names_by_id.end() ||
+          (maybe_name_id >= 1 && maybe_name_id <= names.size())) {
         ParseStartElement();
         return;
       }
@@ -3487,8 +3495,8 @@ private:
   idx_t size;
   idx_t offset = 0;
   const std::vector<XmlaColumn> &columns;
-  const std::function<bool(const std::vector<Value> &row)> &on_row;
-  const std::function<bool()> &should_stop;
+  std::function<bool(const std::vector<Value> &row)> on_row;
+  std::function<bool()> should_stop;
   std::vector<std::string> strings;
   std::vector<ExpandedName> names;
   std::unordered_map<uint32_t, ExpandedName> names_by_id;

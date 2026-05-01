@@ -9,7 +9,7 @@
 
 ## 2) Exact Reproducible Commands
 
-Run from repo root (`/Users/trey/code/pbi_scanner`).
+Run from this repository’s root directory (the folder that contains `extension_config.cmake`).
 
 ### A. Build + deterministic local SQL tests
 
