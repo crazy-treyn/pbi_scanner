@@ -283,9 +283,7 @@ Command wrapper behavior:
 - Uses `cmake.exe` on `PATH`, else Visual Studio CMake fallback paths.
 - Configures with repo-safe defaults:
   - `-DCMAKE_IGNORE_PATH=C:/msys64`
-  - `-DOPENSSL_ROOT_DIR=C:/Users/TreyUdy/miniconda3/Library` (override with `OPENSSL_ROOT_DIR`)
-  - `-DZLIB_INCLUDE_DIR=C:/Users/TreyUdy/miniconda3/Library/include` (override with `ZLIB_INCLUDE_DIR`)
-  - `-DZLIB_LIBRARY=C:/Users/TreyUdy/miniconda3/Library/lib/zlib.lib` (override with `ZLIB_LIBRARY`)
+  - OpenSSL/Zlib defaults: if `OPENSSL_ROOT_DIR`, `ZLIB_INCLUDE_DIR`, and `ZLIB_LIBRARY` are unset, the script tries `CONDA_PREFIX\Library` (when `opensslv.h` is present), then common installs under `%USERPROFILE%` (`miniconda3`, `miniconda`, `anaconda3`, `mambaforge`, `miniforge3`). Override any of these with the matching environment variable.
 - Builds with serialized MSBuild (`-- /m:1`) to reduce Windows file-lock failures.
 
 Optional launcher:

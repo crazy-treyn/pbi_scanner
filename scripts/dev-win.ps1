@@ -125,6 +125,31 @@ function Convert-ToCMakePath {
 	return $Value -replace "\\", "/"
 }
 
+function Resolve-DefaultCondaLibraryRoot {
+	if ($env:CONDA_PREFIX) {
+		$candidate = Join-Path $env:CONDA_PREFIX "Library"
+		$openssl_hdr = Join-Path $candidate "include\openssl\opensslv.h"
+		if (Test-Path -LiteralPath $openssl_hdr) {
+			return $candidate
+		}
+	}
+
+	$profile_root = $env:USERPROFILE
+	if (-not $profile_root) {
+		throw "Could not resolve OpenSSL/Zlib defaults: USERPROFILE is unset. Set OPENSSL_ROOT_DIR, ZLIB_INCLUDE_DIR, and ZLIB_LIBRARY."
+	}
+
+	foreach ($conda_name in @("miniconda3", "miniconda", "anaconda3", "mambaforge", "miniforge3")) {
+		$candidate = Join-Path $profile_root "$conda_name\Library"
+		$openssl_hdr = Join-Path $candidate "include\openssl\opensslv.h"
+		if (Test-Path -LiteralPath $openssl_hdr) {
+			return $candidate
+		}
+	}
+
+	throw "Could not locate a Conda-style Library folder with OpenSSL headers. Install openssl/zlib in Conda or set OPENSSL_ROOT_DIR, ZLIB_INCLUDE_DIR, and ZLIB_LIBRARY."
+}
+
 function Invoke-InVsDevShell {
 	param(
 		[string]$VsDevCmdPath,
@@ -147,10 +172,15 @@ $cmake_path = Resolve-CMakePath
 $vsdevcmd_path = Resolve-VsDevCmd
 $extension_config_path = Convert-ToCMakePath (Join-Path $repo_root "extension_config.cmake")
 
-$openssl_root_dir = Convert-ToCMakePath $(if ($env:OPENSSL_ROOT_DIR) { $env:OPENSSL_ROOT_DIR } else { "C:/Users/TreyUdy/miniconda3/Library" })
-$zlib_include_dir = Convert-ToCMakePath $(if ($env:ZLIB_INCLUDE_DIR) { $env:ZLIB_INCLUDE_DIR } else { "C:/Users/TreyUdy/miniconda3/Library/include" })
-$zlib_library = Convert-ToCMakePath $(if ($env:ZLIB_LIBRARY) { $env:ZLIB_LIBRARY } else { "C:/Users/TreyUdy/miniconda3/Library/lib/zlib.lib" })
-$openssl_bin_dir = if ($env:OPENSSL_ROOT_DIR) { Join-Path $env:OPENSSL_ROOT_DIR "bin" } else { "C:\Users\TreyUdy\miniconda3\Library\bin" }
+$default_conda_library = $null
+if (-not ($env:OPENSSL_ROOT_DIR -and $env:ZLIB_INCLUDE_DIR -and $env:ZLIB_LIBRARY)) {
+	$default_conda_library = Resolve-DefaultCondaLibraryRoot
+}
+
+$openssl_root_dir = Convert-ToCMakePath $(if ($env:OPENSSL_ROOT_DIR) { $env:OPENSSL_ROOT_DIR } else { $default_conda_library })
+$zlib_include_dir = Convert-ToCMakePath $(if ($env:ZLIB_INCLUDE_DIR) { $env:ZLIB_INCLUDE_DIR } else { (Join-Path $default_conda_library "include") })
+$zlib_library = Convert-ToCMakePath $(if ($env:ZLIB_LIBRARY) { $env:ZLIB_LIBRARY } else { (Join-Path $default_conda_library "lib\zlib.lib") })
+$openssl_bin_dir = if ($env:OPENSSL_ROOT_DIR) { Join-Path $env:OPENSSL_ROOT_DIR "bin" } else { Join-Path $default_conda_library "bin" }
 
 switch ($Command) {
 	"configure" {
