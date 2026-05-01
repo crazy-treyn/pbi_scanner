@@ -269,43 +269,30 @@ sudo dnf install -y git gcc-c++ make cmake pkg-config openssl-devel
 
 Recommended: WSL2 + Linux steps.
 
-For native Windows builds:
-
-- Visual Studio 2019 or 2022 Build Tools (Desktop development with C++)
-- CMake and Ninja from Visual Studio, or compatible CMake/Ninja on `PATH`
-- Git
-- OpenSSL for Windows
-- Optional: Azure CLI for live Power BI runs
-
-Then from an `x64 Native Tools Command Prompt` or a PowerShell session that
-invokes `VsDevCmd.bat` before CMake:
-
-```bat
-git clone --recurse-submodules https://github.com/crazy-treyn/pbi_scanner.git
-cd pbi_scanner
-cmake -S duckdb -B build\release -DDUCKDB_EXTENSION_CONFIGS=%CD%\extension_config.cmake -DCMAKE_BUILD_TYPE=Release
-cmake --build build\release --config Release
-ctest --test-dir build\release --build-config Release --output-on-failure -R test/sql/pbi_scanner.test
-```
-
-PowerShell example using Visual Studio Build Tools installed in the default
-location:
+For native Windows builds, use the repo wrapper so Visual Studio and CMake
+paths are resolved automatically:
 
 ```powershell
-$vsDevCmd = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2019\BuildTools\Common7\Tools\VsDevCmd.bat"
-$cmake = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-cmd.exe /d /c "`"$vsDevCmd`" -arch=x64 -host_arch=x64 && `"$cmake`" --build build\release --config Release"
+.\scripts\dev-win.ps1 build
+.\scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test
 ```
 
-Use the full `cmake --build build\release --config Release` command on Windows.
-Some generated DuckDB extension build trees do not expose a separate
-`pbi_scanner` target alias, even though the full release build correctly
-rebuilds the extension and links `duckdb.exe`.
+Command wrapper behavior:
 
-If OpenSSL is not found:
+- Uses `VsDevCmd.bat` from VS 2022 Build Tools first, then VS 2019 Build Tools.
+- Uses `cmake.exe` on `PATH`, else Visual Studio CMake fallback paths.
+- Configures with repo-safe defaults:
+  - `-DCMAKE_IGNORE_PATH=C:/msys64`
+  - `-DOPENSSL_ROOT_DIR=C:/Users/TreyUdy/miniconda3/Library` (override with `OPENSSL_ROOT_DIR`)
+  - `-DZLIB_INCLUDE_DIR=C:/Users/TreyUdy/miniconda3/Library/include` (override with `ZLIB_INCLUDE_DIR`)
+  - `-DZLIB_LIBRARY=C:/Users/TreyUdy/miniconda3/Library/lib/zlib.lib` (override with `ZLIB_LIBRARY`)
+- Builds with serialized MSBuild (`-- /m:1`) to reduce Windows file-lock failures.
+
+Optional launcher:
 
 ```bat
-set OPENSSL_ROOT_DIR=C:\path\to\OpenSSL
+scripts\dev-win.cmd build
+scripts\dev-win.cmd test -R test/sql/pbi_scanner.test
 ```
 
 For live local benchmarking on native Windows, prefer the repo-local Python

@@ -63,6 +63,19 @@
 - `CMAKE_BUILD_PARALLEL_LEVEL=4 GEN=ninja make`: bounded parallel Ninja build.
 - `make clean`: removes local build outputs.
 
+### Windows Native Build Fallback (when `make` is unavailable)
+
+- Preferred native path: use the wrapper from repo root:
+  - `.\scripts\dev-win.ps1 configure`
+  - `.\scripts\dev-win.ps1 build`
+  - `.\scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test`
+- The wrapper automatically:
+  - Locates and invokes `VsDevCmd.bat` (VS 2022 Build Tools first, then VS 2019 Build Tools).
+  - Resolves `cmake.exe` from `PATH` or known Visual Studio Build Tools paths.
+  - Applies repo-safe configure defaults (`CMAKE_IGNORE_PATH`, `OPENSSL_ROOT_DIR`, `ZLIB_INCLUDE_DIR`, `ZLIB_LIBRARY`) with env-var override support.
+  - Uses serialized MSBuild (`-- /m:1`) to reduce file-lock issues.
+- Optional launcher: `scripts\dev-win.cmd <subcommand>`.
+
 ## DuckDB Version Bump Workflow
 
 - Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
