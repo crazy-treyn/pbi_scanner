@@ -126,7 +126,7 @@
   - `extension.license: MIT`
   - `extension.maintainers`: confirm final GitHub handle(s) before publishing.
   - `extension.excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"`
-  - `repo.github: crazy-treyn/pbi_scanner`
+  - `repo.github: <your-org>/pbi_scanner`
   - `repo.ref`: validated current release commit SHA.
 - Use `repo.ref_next` only for future-release compatibility when DuckDB `main` needs a different commit than latest stable.
 - Include validation evidence in the community PR description: stable CI, next CI if available, local build/test commands, and known platform exclusions.

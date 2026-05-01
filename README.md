@@ -24,7 +24,7 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 ### Step 1: Clone and Build
 
 ```bash
-git clone --recurse-submodules https://github.com/crazy-treyn/pbi_scanner.git
+git clone --recurse-submodules https://github.com/<your-org>/pbi_scanner.git
 cd pbi_scanner
 make
 make test
