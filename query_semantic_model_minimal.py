@@ -36,6 +36,8 @@ Configuration (prefer env vars so nothing secret is hardcoded):
       Resolve powerbi:// to direct XMLA before running.
   PBI_BENCH_USE_BUNDLED_CLI
       Set 1/true to force bundled DuckDB CLI fallback.
+  PBI_BENCH_USE_PYTHON_DUCKDB_ON_WINDOWS
+      Optional; set 1/true to force Python duckdb path on Windows.
   PBI_BENCH_USE_DUCKDB_AZURE_SECRET
       Optional; set 1/true to use DuckDB Azure secret auth (installs/loads
       azure and creates secret). Default path is SET-based auth mode without
@@ -47,9 +49,10 @@ Configuration (prefer env vars so nothing secret is hardcoded):
   PBI_SCANNER_CACHE_DIR
       Override metadata cache directory.
 
-If `duckdb.connect` is missing from the Python `duckdb` package, or if
-PBI_BENCH_USE_BUNDLED_CLI is truthy, this script falls back to the bundled
-`./build/release/duckdb` CLI (after `make release`).
+If `duckdb.connect` is missing from the Python `duckdb` package, if
+PBI_BENCH_USE_BUNDLED_CLI is truthy, or on Windows by default (unless
+PBI_BENCH_USE_PYTHON_DUCKDB_ON_WINDOWS is truthy), this script falls back to
+the bundled `./build/release/duckdb` CLI (after `make release`).
 
 Run with uv (installs the `bench` group / Python duckdb when needed):
   uv run --group bench query_semantic_model_minimal.py
@@ -968,9 +971,22 @@ def main() -> None:
     from bench_duckdb_cli import python_duckdb_connect_usable  # noqa: PLC0415
 
     force_cli = _truthy_env("PBI_BENCH_USE_BUNDLED_CLI")
-    if python_duckdb_connect_usable() and not force_cli:
+    # Python DuckDB extension load currently crashes on Windows in some local setups.
+    # Prefer the bundled CLI there unless explicitly forced to use Python API.
+    use_python_on_windows = _truthy_env("PBI_BENCH_USE_PYTHON_DUCKDB_ON_WINDOWS")
+    if (
+        python_duckdb_connect_usable()
+        and not force_cli
+        and (os.name != "nt" or use_python_on_windows)
+    ):
         run_with_python_duckdb(connection_string, dax_query, secret_name, auth_mode)
     else:
+        if os.name == "nt" and not force_cli and not use_python_on_windows:
+            print(
+                "[python] using bundled DuckDB CLI on Windows; set "
+                "PBI_BENCH_USE_PYTHON_DUCKDB_ON_WINDOWS=1 to force Python duckdb path",
+                file=sys.stderr,
+            )
         print(
             "[python] using bundled DuckDB CLI "
             "(duckdb.connect unavailable or PBI_BENCH_USE_BUNDLED_CLI enabled)",

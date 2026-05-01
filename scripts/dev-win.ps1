@@ -91,6 +91,7 @@ function Invoke-InVsDevShell {
 
 $repo_root = Split-Path -Parent $PSScriptRoot
 $build_dir = Join-Path $repo_root "build\release"
+$build_dir_cmake = Convert-ToCMakePath $build_dir
 $cmake_path = Resolve-CMakePath
 $vsdevcmd_path = Resolve-VsDevCmd
 $ctest_path = Resolve-CTestPath -CMakePath $cmake_path
@@ -105,13 +106,19 @@ switch ($Command) {
 		$configure_parts = @(
 			(Quote-ForCmd $cmake_path),
 			"-S", (Convert-ToCMakePath (Join-Path $repo_root "duckdb")),
-			"-B", (Convert-ToCMakePath $build_dir),
+			"-B", $build_dir_cmake,
 			"-DDUCKDB_EXTENSION_CONFIGS=$extension_config_path",
 			"-DCMAKE_BUILD_TYPE=Release",
 			"-DCMAKE_IGNORE_PATH=C:/msys64",
 			"-DOPENSSL_ROOT_DIR=$openssl_root_dir",
 			"-DZLIB_INCLUDE_DIR=$zlib_include_dir",
-			"-DZLIB_LIBRARY=$zlib_library"
+			"-DZLIB_LIBRARY=$zlib_library",
+			"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$build_dir_cmake",
+			"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$build_dir_cmake",
+			"-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$build_dir_cmake",
+			"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$build_dir_cmake",
+			"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE=$build_dir_cmake",
+			"-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE=$build_dir_cmake"
 		)
 		if ($ExtraArgs) {
 			$configure_parts += $ExtraArgs
