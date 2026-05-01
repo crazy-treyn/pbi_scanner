@@ -61,6 +61,57 @@ function Resolve-CTestPath {
 	throw "Could not find ctest.exe on PATH or next to resolved cmake.exe."
 }
 
+function Resolve-UnittestPath {
+	param([string]$BuildDir)
+
+	$candidates = @(
+		(Join-Path $BuildDir "unittest.exe"),
+		(Join-Path $BuildDir "test\Release\unittest.exe"),
+		(Join-Path $BuildDir "test\unittest.exe")
+	)
+
+	foreach ($candidate in $candidates) {
+		if (Test-Path -LiteralPath $candidate) {
+			return $candidate
+		}
+	}
+
+	throw "Could not find unittest.exe under build/release. Run .\scripts\dev-win.ps1 build first."
+}
+
+function Resolve-UnittestArgs {
+	param([string[]]$InputArgs)
+
+	if (-not $InputArgs -or $InputArgs.Count -eq 0) {
+		return @("*pbi_scanner.test*")
+	}
+
+	$resolved = New-Object System.Collections.Generic.List[string]
+
+	$NormalizeFilter = {
+		param([string]$Filter)
+		if ((-not $Filter.Contains("*")) -and $Filter.EndsWith(".test")) {
+			return "*$Filter*"
+		}
+		return $Filter
+	}
+
+	for ($i = 0; $i -lt $InputArgs.Count; $i++) {
+		$current = $InputArgs[$i]
+		if ($current -eq "-R") {
+			if ($i + 1 -ge $InputArgs.Count) {
+				throw "Expected a test filter after -R."
+			}
+			$resolved.Add((& $NormalizeFilter $InputArgs[$i + 1]))
+			$i += 1
+			continue
+		}
+		$resolved.Add((& $NormalizeFilter $current))
+	}
+
+	return $resolved.ToArray()
+}
+
 function Quote-ForCmd {
 	param([string]$Value)
 	return '"' + ($Value -replace '"', '\"') + '"'
@@ -94,12 +145,12 @@ $build_dir = Join-Path $repo_root "build\release"
 $build_dir_cmake = Convert-ToCMakePath $build_dir
 $cmake_path = Resolve-CMakePath
 $vsdevcmd_path = Resolve-VsDevCmd
-$ctest_path = Resolve-CTestPath -CMakePath $cmake_path
 $extension_config_path = Convert-ToCMakePath (Join-Path $repo_root "extension_config.cmake")
 
 $openssl_root_dir = Convert-ToCMakePath $(if ($env:OPENSSL_ROOT_DIR) { $env:OPENSSL_ROOT_DIR } else { "C:/Users/TreyUdy/miniconda3/Library" })
 $zlib_include_dir = Convert-ToCMakePath $(if ($env:ZLIB_INCLUDE_DIR) { $env:ZLIB_INCLUDE_DIR } else { "C:/Users/TreyUdy/miniconda3/Library/include" })
 $zlib_library = Convert-ToCMakePath $(if ($env:ZLIB_LIBRARY) { $env:ZLIB_LIBRARY } else { "C:/Users/TreyUdy/miniconda3/Library/lib/zlib.lib" })
+$openssl_bin_dir = if ($env:OPENSSL_ROOT_DIR) { Join-Path $env:OPENSSL_ROOT_DIR "bin" } else { "C:\Users\TreyUdy\miniconda3\Library\bin" }
 
 switch ($Command) {
 	"configure" {
@@ -153,16 +204,19 @@ switch ($Command) {
 		}
 	}
 	"test" {
-		$ctest_parts = @(
-			(Quote-ForCmd $ctest_path),
-			"--test-dir", (Quote-ForCmd $build_dir),
-			"--build-config", "Release",
-			"--output-on-failure"
+		$unittest_path = Resolve-UnittestPath -BuildDir $build_dir
+		$unittest_args = Resolve-UnittestArgs -InputArgs $ExtraArgs
+		$runtime_path = """PATH=$build_dir;$openssl_bin_dir;%PATH%"""
+		$test_parts = @(
+			"set", $runtime_path, "&&",
+			(Quote-ForCmd $unittest_path)
 		)
-		if ($ExtraArgs) {
-			$ctest_parts += $ExtraArgs
+		if ($unittest_args) {
+			foreach ($test_arg in $unittest_args) {
+				$test_parts += (Quote-ForCmd $test_arg)
+			}
 		}
-		Invoke-InVsDevShell -VsDevCmdPath $vsdevcmd_path -CommandParts $ctest_parts
+		Invoke-InVsDevShell -VsDevCmdPath $vsdevcmd_path -CommandParts $test_parts
 	}
 	default {
 		throw "Unknown command: $Command"
