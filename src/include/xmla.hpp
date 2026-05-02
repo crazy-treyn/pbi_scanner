@@ -36,7 +36,10 @@ struct XmlaColumn {
 struct XmlaRequest {
   std::string url;
   std::string catalog;
+  std::string auth_scheme = "Bearer";
   std::string access_token;
+  std::string xmla_server;
+  std::string xmla_workspace_id;
   std::string statement;
   std::string effective_user_name;
   int64_t timeout_ms = 300000;

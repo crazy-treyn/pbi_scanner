@@ -3518,20 +3518,38 @@ private:
   std::string owned_data;
 };
 
-static HttpHeaders XmlaHeaders(const std::string &access_token,
+static HttpHeaders XmlaHeaders(const XmlaRequest &request,
                                XmlaTransportMode transport_mode) {
   // ADOMD.NET / DAX Studio also negotiate SOAP ProtocolCapabilities sx (binary
   // XML) and xpress (compression) per MS docs; that changes the response wire
   // format. Prefer sx+xpress by default because it has the smallest observed
   // payload; callers can set PBI_SCANNER_XMLA_TRANSPORT=plain for fallback.
   HttpHeaders headers{
-      std::make_pair("Authorization", "Bearer " + access_token),
+      std::make_pair("Authorization",
+                     request.auth_scheme + " " + request.access_token),
       std::make_pair("SOAPAction",
                      "\"urn:schemas-microsoft-com:xml-analysis:Execute\""),
       std::make_pair("User-Agent", "ASClient/.NET-Core"),
+      std::make_pair("X-AS-AcquireTokenStats", "AppName="),
       std::make_pair("X-Transport-Caps-Negotiation-Flags",
                      XmlaTransportFlags(transport_mode)),
       std::make_pair("SspropInitAppName", "pbi_scanner")};
+  if (!request.xmla_server.empty()) {
+    headers.emplace_back("x-ms-xmlacaps-negotiation-flags",
+                         XmlaTransportFlags(transport_mode));
+    headers.emplace_back("x-ms-xmlaserver", request.xmla_server);
+    headers.emplace_back("x-ms-xmladatabase", request.catalog);
+    headers.emplace_back("x-ms-xmlaintendedusage", "0");
+    headers.emplace_back("x-ms-xmlatransientmodelmode", "0");
+    headers.emplace_back("x-ms-xmladedicatedconnection", "0");
+    headers.emplace_back("x-ms-xmlaapp-general-info",
+                         "Host=Other,AadClient=MSAL,CacheUsed=1,ConStrId=1,"
+                         "sspropInitApp=pbi_scanner");
+  }
+  if (request.auth_scheme == "Bearer" && !request.xmla_workspace_id.empty()) {
+    headers.emplace_back("x-ms-xmlaworkspaceobjectid",
+                         request.xmla_workspace_id);
+  }
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
   headers.emplace_back("Accept-Encoding", "gzip, deflate");
 #endif
@@ -4076,8 +4094,8 @@ std::vector<XmlaColumn> XmlaExecutor::ProbeSchema(const XmlaRequest &request) {
       true, [&](const std::vector<XmlaColumn> &columns) { schema = columns; },
       nullptr);
   auto response = http->PostStream(
-      request.url, XmlaHeaders(request.access_token, schema_transport_mode),
-      envelope, "text/xml",
+      request.url, XmlaHeaders(request, schema_transport_mode), envelope,
+      "text/xml",
       [&](const_data_ptr_t data, idx_t data_length) {
         if (buffer_response) {
           buffered_response.append(reinterpret_cast<const char *>(data),
@@ -4186,8 +4204,7 @@ void XmlaExecutor::ExecuteStreaming(
     return true;
   };
   auto response = http->PostStream(
-      request.url, XmlaHeaders(request.access_token, transport_mode), envelope,
-      "text/xml",
+      request.url, XmlaHeaders(request, transport_mode), envelope, "text/xml",
       [&](const_data_ptr_t data, idx_t data_length) {
         if (should_stop && should_stop()) {
           return false;
