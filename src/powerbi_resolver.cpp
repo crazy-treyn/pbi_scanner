@@ -11,6 +11,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 
 namespace duckdb {
 using namespace duckdb_yyjson; // NOLINT
@@ -25,6 +27,35 @@ static constexpr const char *GENERATE_AS_TOKEN_PATH =
     "/metadata/v201606/generateastoken?PreferClientRouting=true";
 static constexpr const char *CLUSTER_RESOLVE_PATH = "/webapi/clusterResolve";
 static constexpr const char *WEBAPI_XMLA_PATH = "/webapi/xmla";
+static constexpr int64_t MWC_TOKEN_CACHE_TTL_SECONDS = 5 * 60;
+
+struct CachedMwcToken {
+  CachedMwcToken() = default;
+  CachedMwcToken(string token_p, int64_t expires_at_unix_seconds_p)
+      : token(std::move(token_p)),
+        expires_at_unix_seconds(expires_at_unix_seconds_p) {}
+
+  string token;
+  int64_t expires_at_unix_seconds = 0;
+};
+
+std::mutex mwc_token_cache_lock;
+std::unordered_map<string, CachedMwcToken> mwc_token_cache;
+
+static int64_t CurrentUnixSeconds() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+static string HashSensitiveValue(const string &value) {
+  uint64_t hash = 1469598103934665603ULL;
+  for (auto ch : value) {
+    hash ^= static_cast<uint8_t>(ch);
+    hash *= 1099511628211ULL;
+  }
+  return std::to_string(hash);
+}
 
 static HttpHeaders PowerBIHeaders(const string &access_token) {
   return HttpHeaders{std::make_pair("Authorization", "Bearer " + access_token)};
@@ -198,6 +229,38 @@ static string ResponseExcerpt(const string &body) {
     return body;
   }
   return body.substr(0, MAX_EXCERPT_LENGTH) + "...";
+}
+
+static string MwcTokenCacheKey(const PowerBIEndpoint &endpoint,
+                               const PowerBIResolvedTarget &target,
+                               const string &access_token) {
+  return endpoint.host + "|workspace=" + target.workspace_id +
+         "|capacity=" + target.capacity_object_id +
+         "|dataset=" + target.dataset_name +
+         "|aad_hash=" + HashSensitiveValue(access_token);
+}
+
+static bool TryGetCachedMwcToken(const string &cache_key, string &token) {
+  std::lock_guard<std::mutex> guard(mwc_token_cache_lock);
+  auto entry = mwc_token_cache.find(cache_key);
+  if (entry == mwc_token_cache.end()) {
+    return false;
+  }
+  if (entry->second.expires_at_unix_seconds <= CurrentUnixSeconds()) {
+    mwc_token_cache.erase(entry);
+    return false;
+  }
+  token = entry->second.token;
+  if (DebugTimingsEnabled()) {
+    std::fprintf(stderr, "[pbi_scanner] MWC token cache hit\n");
+  }
+  return true;
+}
+
+static void StoreCachedMwcToken(const string &cache_key, const string &token) {
+  std::lock_guard<std::mutex> guard(mwc_token_cache_lock);
+  mwc_token_cache[cache_key] =
+      CachedMwcToken{token, CurrentUnixSeconds() + MWC_TOKEN_CACHE_TTL_SECONDS};
 }
 
 } // namespace
@@ -381,6 +444,11 @@ std::string GeneratePowerBIXmlaToken(const PowerBIEndpoint &endpoint,
                       "capacity, and dataset identifiers required for XMLA "
                       "token generation");
   }
+  auto cache_key = MwcTokenCacheKey(endpoint, target, access_token);
+  string cached_token;
+  if (TryGetCachedMwcToken(cache_key, cached_token)) {
+    return cached_token;
+  }
 
   HttpClient client(timeout_ms);
   auto token_start = std::chrono::steady_clock::now();
@@ -425,7 +493,9 @@ std::string GeneratePowerBIXmlaToken(const PowerBIEndpoint &endpoint,
   if (!root || !yyjson_is_obj(root)) {
     throw IOException("generate XMLA token response was not a JSON object");
   }
-  return GetRequiredJSONString(root, "Token", "generate XMLA token");
+  auto token = GetRequiredJSONString(root, "Token", "generate XMLA token");
+  StoreCachedMwcToken(cache_key, token);
+  return token;
 }
 
 } // namespace duckdb
