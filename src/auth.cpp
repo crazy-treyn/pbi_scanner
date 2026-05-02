@@ -13,7 +13,6 @@
 
 #include "yyjson.hpp"
 
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
@@ -63,21 +62,6 @@ static constexpr int64_t TOKEN_CACHE_EXPIRY_SKEW_SECONDS = 5 * 60;
 
 std::mutex token_cache_lock;
 std::unordered_map<string, CachedAccessToken> token_cache;
-
-static int64_t CurrentUnixSeconds() {
-  return std::chrono::duration_cast<std::chrono::seconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-static string HashSensitiveValue(const string &value) {
-  uint64_t hash = 1469598103934665603ULL;
-  for (auto ch : value) {
-    hash ^= static_cast<uint8_t>(ch);
-    hash *= 1099511628211ULL;
-  }
-  return std::to_string(hash);
-}
 
 static int DecodeBase64UrlChar(char value) {
   if (value >= 'A' && value <= 'Z') {

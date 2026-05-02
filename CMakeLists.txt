@@ -15,11 +15,19 @@ include_directories(duckdb/third_party/yyjson/include)
 
 set(EXTENSION_SOURCES
     src/pbi_scanner_extension.cpp
+    src/pbi_scanner_test_functions.cpp
+    src/dax_probe.cpp
     src/dax_query.cpp
+    src/metadata_cache.cpp
+    src/vector_writer.cpp
     src/auth.cpp
     src/connection_string.cpp
     src/http_client.cpp
     src/powerbi_resolver.cpp
+    src/xmla_transport.cpp
+    src/xmla_util.cpp
+    src/xmla_value.cpp
+    src/xpress.cpp
     src/xmla.cpp
 )
 
