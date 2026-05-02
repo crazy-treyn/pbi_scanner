@@ -1189,6 +1189,7 @@ private:
     auto current_chunk = CreateChunk();
     idx_t current_chunk_size = 0;
     bool retried_mwc_execute = false;
+    bool retried_legacy_bearer_execute = false;
   retry_execute:
     try {
       executor->ExecuteStreaming(
@@ -1240,6 +1241,27 @@ private:
         request.access_token = GeneratePowerBIXmlaToken(
             bind_config.endpoint, bind_target, power_bi_aad_token,
             request.timeout_ms, true);
+        executor = make_uniq<XmlaExecutor>(request.timeout_ms);
+        current_chunk = CreateChunk();
+        current_chunk_size = 0;
+        goto retry_execute;
+      }
+      if (!retried_legacy_bearer_execute &&
+          IsMwcXmlaUnauthorized(request.auth_scheme, ex.what()) &&
+          !power_bi_aad_token.empty() &&
+          !bind_target.capacity_object_id.empty()) {
+        retried_legacy_bearer_execute = true;
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
+                               "retrying legacy Bearer XMLA path\n");
+        }
+        request.url =
+            ResolveLegacyPowerBIXmlaUrl(bind_config.endpoint, bind_target,
+                                        power_bi_aad_token, request.timeout_ms);
+        request.catalog = bind_target.internal_catalog;
+        request.auth_scheme = "Bearer";
+        request.access_token = power_bi_aad_token;
+        request.xmla_server.clear();
         executor = make_uniq<XmlaExecutor>(request.timeout_ms);
         current_chunk = CreateChunk();
         current_chunk_size = 0;
