@@ -1329,6 +1329,39 @@ static void FallbackToLegacyBearerXmla(const PowerBIConnectionConfig &config,
   xmla_access_token = access_token;
 }
 
+//! Sets catalog, auth scheme, and token for a resolved Power BI target (not
+//! direct XMLA). Capacity-backed targets use dataset catalog + MWC token.
+static void ApplyXmlaAuthForResolvedPowerBiTarget(
+    const PowerBIConnectionConfig &config, const PowerBIResolvedTarget &target,
+    const string &access_token, int64_t timeout_ms, string &xmla_catalog,
+    string &xmla_auth_scheme, string &xmla_access_token) {
+  if (!target.capacity_object_id.empty()) {
+    xmla_catalog = target.dataset_name;
+    auto xmla_token_start = std::chrono::steady_clock::now();
+    xmla_access_token = GeneratePowerBIXmlaToken(config.endpoint, target,
+                                                 access_token, timeout_ms);
+    DebugTiming("GeneratePowerBIXmlaToken", xmla_token_start);
+    xmla_auth_scheme = "MwcToken";
+  } else {
+    xmla_catalog = target.internal_catalog;
+    xmla_auth_scheme = "Bearer";
+    xmla_access_token = access_token;
+  }
+}
+
+//! Full retry is only for SOAP fault-style probe failures (TOPN may be
+//! rejected). Transport, HTTP, and interrupts must not trigger a second probe.
+static bool LimitedSchemaProbeFailureAllowsFullRetry(const Exception &ex) {
+  auto msg = StringUtil::Lower(string(ex.what()));
+  if (msg.find("request failed") != string::npos) {
+    return false;
+  }
+  if (msg.find("xmla schema probe http") != string::npos) {
+    return false;
+  }
+  return msg.find("xmla schema probe failed") != string::npos;
+}
+
 static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
                                              TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types,
@@ -1372,14 +1405,9 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
       DebugTiming("ResolvePowerBITarget", resolver_start);
       StoreCachedTarget(config, target);
     }
-    if (!target.capacity_object_id.empty()) {
-      xmla_catalog = target.dataset_name;
-      auto xmla_token_start = std::chrono::steady_clock::now();
-      xmla_access_token = GeneratePowerBIXmlaToken(config.endpoint, target,
-                                                   access_token, timeout_ms);
-      DebugTiming("GeneratePowerBIXmlaToken", xmla_token_start);
-      xmla_auth_scheme = "MwcToken";
-    }
+    ApplyXmlaAuthForResolvedPowerBiTarget(config, target, access_token,
+                                          timeout_ms, xmla_catalog,
+                                          xmla_auth_scheme, xmla_access_token);
   }
   if (xmla_catalog.empty()) {
     xmla_catalog = target.internal_catalog;
@@ -1422,15 +1450,12 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
                        static_cast<long long>(schema_probe_rows));
         }
         return probe_schema(limited_probe_statement);
+      } catch (const InterruptException &) {
+        throw;
       } catch (const Exception &ex) {
-        if (DebugTimingsEnabled()) {
-          std::fprintf(stderr,
-                       "[pbi_scanner] limited schema probe failed, retrying "
-                       "full probe: %s\n",
-                       ex.what());
+        if (!LimitedSchemaProbeFailureAllowsFullRetry(ex)) {
+          throw;
         }
-        return probe_schema(full_probe_statement);
-      } catch (const std::exception &ex) {
         if (DebugTimingsEnabled()) {
           std::fprintf(stderr,
                        "[pbi_scanner] limited schema probe failed, retrying "
@@ -1459,10 +1484,9 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
                                       access_token, timeout_ms);
         DebugTiming("ResolvePowerBITarget retry", resolver_start);
         StoreCachedTarget(config, target);
-        if (!target.capacity_object_id.empty()) {
-          xmla_access_token = GeneratePowerBIXmlaToken(
-              config.endpoint, target, access_token, timeout_ms);
-        }
+        ApplyXmlaAuthForResolvedPowerBiTarget(
+            config, target, access_token, timeout_ms, xmla_catalog,
+            xmla_auth_scheme, xmla_access_token);
         columns = probe_schema_with_fallback();
       }
     } catch (const std::exception &ex) {
@@ -1482,10 +1506,9 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
                                       access_token, timeout_ms);
         DebugTiming("ResolvePowerBITarget retry", resolver_start);
         StoreCachedTarget(config, target);
-        if (!target.capacity_object_id.empty()) {
-          xmla_access_token = GeneratePowerBIXmlaToken(
-              config.endpoint, target, access_token, timeout_ms);
-        }
+        ApplyXmlaAuthForResolvedPowerBiTarget(
+            config, target, access_token, timeout_ms, xmla_catalog,
+            xmla_auth_scheme, xmla_access_token);
         columns = probe_schema_with_fallback();
       }
     }
