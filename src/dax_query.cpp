@@ -1017,19 +1017,23 @@ bool TestMetadataCacheRoundTrip() {
   return true;
 }
 
+static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
+                                  const string &message);
+
 struct DaxQueryBindData : public TableFunctionData {
   DaxQueryBindData(PowerBIConnectionConfig config_p,
                    PowerBIResolvedTarget target_p,
                    std::vector<XmlaColumn> columns_p, string dax_text_p,
                    string xmla_catalog_p, string xmla_auth_scheme_p,
-                   string access_token_p, string effective_user_name_p,
-                   int64_t timeout_ms_p,
+                   string access_token_p, string power_bi_aad_token_p,
+                   string effective_user_name_p, int64_t timeout_ms_p,
                    std::shared_ptr<HttpClient> xmla_http_client_p = nullptr)
       : config(std::move(config_p)), target(std::move(target_p)),
         columns(std::move(columns_p)), dax_text(std::move(dax_text_p)),
         xmla_catalog(std::move(xmla_catalog_p)),
         xmla_auth_scheme(std::move(xmla_auth_scheme_p)),
         access_token(std::move(access_token_p)),
+        power_bi_aad_token(std::move(power_bi_aad_token_p)),
         effective_user_name(std::move(effective_user_name_p)),
         timeout_ms(timeout_ms_p),
         xmla_http_client(std::move(xmla_http_client_p)) {}
@@ -1045,6 +1049,7 @@ struct DaxQueryBindData : public TableFunctionData {
            dax_text == other.dax_text && xmla_catalog == other.xmla_catalog &&
            xmla_auth_scheme == other.xmla_auth_scheme &&
            access_token == other.access_token &&
+           power_bi_aad_token == other.power_bi_aad_token &&
            effective_user_name == other.effective_user_name &&
            timeout_ms == other.timeout_ms;
   }
@@ -1055,7 +1060,10 @@ struct DaxQueryBindData : public TableFunctionData {
   string dax_text;
   string xmla_catalog;
   string xmla_auth_scheme;
+  //! XMLA Authorization token (MWC AS token or Azure AD Bearer).
   string access_token;
+  //! Azure AD token used for Power BI REST + generateastoken (MWC refresh).
+  string power_bi_aad_token;
   string effective_user_name;
   int64_t timeout_ms;
   //! Populated when ProbeSchema ran; reused for execute on same TCP connection.
@@ -1065,7 +1073,8 @@ struct DaxQueryBindData : public TableFunctionData {
 struct DaxQueryGlobalState : public GlobalTableFunctionState {
   explicit DaxQueryGlobalState(const DaxQueryBindData &bind_data)
       : columns(bind_data.columns), bind_config(bind_data.config),
-        bind_target(bind_data.target) {
+        bind_target(bind_data.target),
+        power_bi_aad_token(bind_data.power_bi_aad_token) {
     for (const auto &column : columns) {
       column_types.push_back(column.duckdb_type);
     }
@@ -1133,6 +1142,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   std::unique_ptr<XmlaExecutor> executor;
   PowerBIConnectionConfig bind_config;
   PowerBIResolvedTarget bind_target;
+  string power_bi_aad_token;
   std::mutex lock;
   std::condition_variable condition;
   std::deque<unique_ptr<DataChunk>> chunks;
@@ -1178,6 +1188,8 @@ private:
     bool first_row_logged = false;
     auto current_chunk = CreateChunk();
     idx_t current_chunk_size = 0;
+    bool retried_mwc_execute = false;
+  retry_execute:
     try {
       executor->ExecuteStreaming(
           request, &columns, nullptr,
@@ -1216,6 +1228,23 @@ private:
         }
       }
     } catch (const Exception &ex) {
+      if (!retried_mwc_execute &&
+          IsMwcXmlaUnauthorized(request.auth_scheme, ex.what()) &&
+          !power_bi_aad_token.empty() &&
+          !bind_target.capacity_object_id.empty()) {
+        retried_mwc_execute = true;
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
+                               "refreshing AS token and retrying once\n");
+        }
+        request.access_token = GeneratePowerBIXmlaToken(
+            bind_config.endpoint, bind_target, power_bi_aad_token,
+            request.timeout_ms, true);
+        executor = make_uniq<XmlaExecutor>(request.timeout_ms);
+        current_chunk = CreateChunk();
+        current_chunk_size = 0;
+        goto retry_execute;
+      }
       InvalidateCachedSchema(bind_target, request.statement,
                              request.effective_user_name);
       if (!bind_config.is_direct_xmla) {
@@ -1381,7 +1410,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
 
   auto bind_start = std::chrono::steady_clock::now();
   auto access_token_start = std::chrono::steady_clock::now();
-  auto access_token =
+  auto power_bi_aad_token =
       ResolvePowerBIAccessToken(context, config, input.named_parameters);
   DebugTiming("ResolvePowerBIAccessToken", access_token_start);
   auto effective_user_name =
@@ -1392,7 +1421,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   bool target_from_cache = false;
   string xmla_catalog;
   string xmla_auth_scheme = "Bearer";
-  string xmla_access_token = access_token;
+  string xmla_access_token = power_bi_aad_token;
   if (config.is_direct_xmla) {
     target.aixl_url = config.data_source;
     target.internal_catalog = config.initial_catalog;
@@ -1401,11 +1430,11 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     if (!target_from_cache) {
       auto resolver_start = std::chrono::steady_clock::now();
       target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                    access_token, timeout_ms);
+                                    power_bi_aad_token, timeout_ms);
       DebugTiming("ResolvePowerBITarget", resolver_start);
       StoreCachedTarget(config, target);
     }
-    ApplyXmlaAuthForResolvedPowerBiTarget(config, target, access_token,
+    ApplyXmlaAuthForResolvedPowerBiTarget(config, target, power_bi_aad_token,
                                           timeout_ms, xmla_catalog,
                                           xmla_auth_scheme, xmla_access_token);
   }
@@ -1469,8 +1498,8 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
       columns = probe_schema_with_fallback();
     } catch (const Exception &ex) {
       if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
-        FallbackToLegacyBearerXmla(config, target, access_token, timeout_ms,
-                                   xmla_catalog, xmla_auth_scheme,
+        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
+                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
                                    xmla_access_token);
         columns = probe_schema_with_fallback();
       } else {
@@ -1481,18 +1510,18 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
         target_from_cache = false;
         auto resolver_start = std::chrono::steady_clock::now();
         target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                      access_token, timeout_ms);
+                                      power_bi_aad_token, timeout_ms);
         DebugTiming("ResolvePowerBITarget retry", resolver_start);
         StoreCachedTarget(config, target);
         ApplyXmlaAuthForResolvedPowerBiTarget(
-            config, target, access_token, timeout_ms, xmla_catalog,
+            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
             xmla_auth_scheme, xmla_access_token);
         columns = probe_schema_with_fallback();
       }
     } catch (const std::exception &ex) {
       if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
-        FallbackToLegacyBearerXmla(config, target, access_token, timeout_ms,
-                                   xmla_catalog, xmla_auth_scheme,
+        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
+                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
                                    xmla_access_token);
         columns = probe_schema_with_fallback();
       } else {
@@ -1503,11 +1532,11 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
         target_from_cache = false;
         auto resolver_start = std::chrono::steady_clock::now();
         target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                      access_token, timeout_ms);
+                                      power_bi_aad_token, timeout_ms);
         DebugTiming("ResolvePowerBITarget retry", resolver_start);
         StoreCachedTarget(config, target);
         ApplyXmlaAuthForResolvedPowerBiTarget(
-            config, target, access_token, timeout_ms, xmla_catalog,
+            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
             xmla_auth_scheme, xmla_access_token);
         columns = probe_schema_with_fallback();
       }
@@ -1527,8 +1556,8 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   return make_uniq<DaxQueryBindData>(
       std::move(config), std::move(target), std::move(columns),
       std::move(dax_text), std::move(xmla_catalog), std::move(xmla_auth_scheme),
-      std::move(xmla_access_token), std::move(effective_user_name), timeout_ms,
-      std::move(xmla_http_client));
+      std::move(xmla_access_token), std::move(power_bi_aad_token),
+      std::move(effective_user_name), timeout_ms, std::move(xmla_http_client));
 }
 
 static unique_ptr<GlobalTableFunctionState>

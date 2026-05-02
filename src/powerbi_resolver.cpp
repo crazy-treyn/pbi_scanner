@@ -433,7 +433,8 @@ std::string ResolveLegacyPowerBIXmlaUrl(const PowerBIEndpoint &endpoint,
 std::string GeneratePowerBIXmlaToken(const PowerBIEndpoint &endpoint,
                                      const PowerBIResolvedTarget &target,
                                      const string &access_token,
-                                     int64_t timeout_ms) {
+                                     int64_t timeout_ms,
+                                     bool bypass_mwc_cache) {
   if (Trimmed(access_token).empty()) {
     throw InvalidInputException("access_token is required");
   }
@@ -446,7 +447,7 @@ std::string GeneratePowerBIXmlaToken(const PowerBIEndpoint &endpoint,
   }
   auto cache_key = MwcTokenCacheKey(endpoint, target, access_token);
   string cached_token;
-  if (TryGetCachedMwcToken(cache_key, cached_token)) {
+  if (!bypass_mwc_cache && TryGetCachedMwcToken(cache_key, cached_token)) {
     return cached_token;
   }
 

@@ -28,7 +28,8 @@ PowerBIResolvedTarget ResolvePowerBITarget(const PowerBIEndpoint &endpoint,
 std::string GeneratePowerBIXmlaToken(const PowerBIEndpoint &endpoint,
                                      const PowerBIResolvedTarget &target,
                                      const std::string &access_token,
-                                     int64_t timeout_ms);
+                                     int64_t timeout_ms,
+                                     bool bypass_mwc_cache = false);
 
 std::string ResolveLegacyPowerBIXmlaUrl(const PowerBIEndpoint &endpoint,
                                         const PowerBIResolvedTarget &target,
