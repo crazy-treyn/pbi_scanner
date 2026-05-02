@@ -169,6 +169,46 @@ FROM dax_query(
 );
 ```
 
+#### Service principal secret (DuckDB `azure` extension)
+
+For automation or when you use a service principal registered in Microsoft Entra ID,
+create a `TYPE azure` secret with `PROVIDER service_principal`. The extension reads
+`tenant_id`, `client_id`, and `client_secret` from that DuckDB secret (the same fields
+you set in SQL as `TENANT_ID`, `CLIENT_ID`, and `CLIENT_SECRET`) and acquires a Power BI
+API token the same way as `auth_mode := 'service_principal'` with named parameters.
+
+When you pass `secret_name` (or `Secret=` in the connection string), the token comes
+from the DuckDB secret; session `SET pbi_scanner_auth_mode` does not override that
+for that call.
+
+```sql
+INSTALL azure;
+LOAD azure;
+
+CREATE SECRET pbi_sp (
+    TYPE azure,
+    PROVIDER service_principal,
+    TENANT_ID '<tenant-guid>',
+    CLIENT_ID '<app-client-id>',
+    CLIENT_SECRET '<client-secret>'
+);
+
+INSTALL pbi_scanner FROM community;
+LOAD pbi_scanner;
+
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("probe_ok", 1)',
+    secret_name := 'pbi_sp'
+);
+```
+
+For a local CLI smoke test that builds this `CREATE SECRET` from environment variables,
+see `query_semantic_model_sql_minimal.py` (`PBI_SQL_USE_AZURE_SECRET=1`,
+`PBI_SQL_AZURE_PROVIDER=service_principal`, and `SP_TENANT_ID` / `SP_CLIENT_ID` /
+`SP_CLIENT_SECRET` or the `AZURE_*` / `PBI_XMLA_*` fallbacks).
+
 ## Catalog and Metadata Discovery
 
 Use these helper functions to inspect semantic model structure.

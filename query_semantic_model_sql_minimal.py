@@ -13,9 +13,20 @@ Configuration matches query_semantic_model_minimal.py where possible:
   PBI_BENCH_SECRET_NAME
   PBI_SQL_AUTH_MODE              (default: azure_cli; also accepts cli)
   PBI_SQL_USE_AZURE_SECRET=0|1   (default: 0; set 1 to use secret_name auth)
+  PBI_SQL_AZURE_PROVIDER         (default: credential_chain; use service_principal
+                                  with tenant/client/secret env vars below)
   PBI_SQL_MODE=count|sample|all   (default: sample)
   PBI_SQL_LIMIT=<n>               (default: 100 for sample mode)
   PBI_SQL_INSTALL_AZURE=0|1      (default: 1; only used when secret mode is on)
+
+Service principal env (first non-empty wins per field):
+  SP_TENANT_ID, SP_CLIENT_ID, SP_CLIENT_SECRET
+  AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+  PBI_XMLA_TENANT_ID, PBI_XMLA_CLIENT_ID, PBI_XMLA_CLIENT_SECRET
+
+When PBI_SQL_AZURE_PROVIDER=service_principal, all three values must resolve.
+Session SET pbi_scanner_auth_mode is then service_principal (cosmetic; the token
+still comes from the DuckDB secret).
 """
 
 from __future__ import annotations
@@ -110,6 +121,44 @@ def _truthy_env(name: str, default: str = "") -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _first_env(*keys: str) -> str:
+    for key in keys:
+        raw = os.environ.get(key, "").strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _resolve_service_principal_credentials() -> tuple[str, str, str]:
+    tenant_id = _first_env(
+        "SP_TENANT_ID",
+        "AZURE_TENANT_ID",
+        "PBI_XMLA_TENANT_ID",
+    )
+    client_id = _first_env(
+        "SP_CLIENT_ID",
+        "AZURE_CLIENT_ID",
+        "PBI_XMLA_CLIENT_ID",
+    )
+    client_secret = _first_env(
+        "SP_CLIENT_SECRET",
+        "AZURE_CLIENT_SECRET",
+        "PBI_XMLA_CLIENT_SECRET",
+    )
+    return tenant_id, client_id, client_secret
+
+
+def _azure_provider() -> str:
+    raw = os.environ.get("PBI_SQL_AZURE_PROVIDER", "").strip().lower()
+    if not raw or raw == "credential_chain":
+        return "credential_chain"
+    if raw == "service_principal":
+        return "service_principal"
+    raise ValueError(
+        "PBI_SQL_AZURE_PROVIDER must be credential_chain or service_principal"
+    )
+
+
 def _result_sql(
     connection_string: str, dax: str, secret_name: str, use_secret_auth: bool
 ) -> str:
@@ -143,21 +192,50 @@ def _build_sql(
 ) -> str:
     statements = [f"LOAD '{escape_sql_literal(str(extension_path))}'"]
     use_secret_auth = _truthy_env("PBI_SQL_USE_AZURE_SECRET", "0")
+    provider = _azure_provider() if use_secret_auth else "credential_chain"
     if use_secret_auth:
         if _truthy_env("PBI_SQL_INSTALL_AZURE", "1"):
             statements.append("INSTALL azure")
-        statements.extend(
-            [
-                "LOAD azure",
-                (
-                    f"CREATE OR REPLACE SECRET {_quote_identifier(secret_name)} "
-                    "(TYPE azure, PROVIDER credential_chain, CHAIN 'cli')"
-                ),
+        statements.append("LOAD azure")
+        if provider == "credential_chain":
+            statements.append(
+                f"CREATE OR REPLACE SECRET {_quote_identifier(secret_name)} "
+                "(TYPE azure, PROVIDER credential_chain, CHAIN 'cli')"
+            )
+        else:
+            tenant_id, client_id, client_secret = (
+                _resolve_service_principal_credentials()
+            )
+            missing = [
+                label
+                for label, val in (
+                    ("tenant", tenant_id),
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
+                )
+                if not val
             ]
-        )
+            if missing:
+                raise ValueError(
+                    "service_principal secret requires tenant, client_id, and "
+                    "client_secret (set SP_* or AZURE_* or PBI_XMLA_* env vars): "
+                    f"missing {', '.join(missing)}"
+                )
+            statements.append(
+                f"CREATE OR REPLACE SECRET {_quote_identifier(secret_name)} "
+                "(TYPE azure, PROVIDER service_principal, "
+                f"TENANT_ID '{escape_sql_literal(tenant_id)}', "
+                f"CLIENT_ID '{escape_sql_literal(client_id)}', "
+                f"CLIENT_SECRET '{escape_sql_literal(client_secret)}')"
+            )
+    session_auth = (
+        "service_principal"
+        if use_secret_auth and provider == "service_principal"
+        else _auth_mode()
+    )
     statements.extend(
         [
-            f"SET pbi_scanner_auth_mode = '{escape_sql_literal(_auth_mode())}'",
+            f"SET pbi_scanner_auth_mode = '{escape_sql_literal(session_auth)}'",
             _result_sql(connection_string, dax, secret_name, use_secret_auth),
         ]
     )
@@ -169,18 +247,25 @@ def main() -> None:
     os.environ.setdefault("PBI_SCANNER_DEBUG_TIMINGS", "1")
     connection_string, dax, secret_name = _bench_config()
     extension_path, duckdb_cli = require_release_artifacts(REPO)
-    sql = _build_sql(extension_path, connection_string, dax, secret_name)
+    try:
+        sql = _build_sql(extension_path, connection_string, dax, secret_name)
+    except ValueError as exc:
+        print(f"[sql-minimal] error: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     env = os.environ.copy()
     runtime_path = _windows_runtime_path(REPO)
     if runtime_path:
         env["PATH"] = runtime_path + os.pathsep + env.get("PATH", "")
 
+    use_secret = _truthy_env("PBI_SQL_USE_AZURE_SECRET", "0")
+    azure_prov = _azure_provider() if use_secret else "credential_chain"
     print(
         "[sql-minimal] running DuckDB CLI SQL smoke "
         f"mode={os.environ.get('PBI_SQL_MODE', 'sample') or 'sample'} "
-        f"auth_mode={_auth_mode()} "
-        f"use_azure_secret={1 if _truthy_env('PBI_SQL_USE_AZURE_SECRET', '0') else 0} "
+        f"session_auth_note={_auth_mode()} "
+        f"use_azure_secret={1 if use_secret else 0} "
+        f"azure_provider={azure_prov} "
         f"install_azure={1 if _truthy_env('PBI_SQL_INSTALL_AZURE', '1') else 0} "
         f"secret={secret_name}"
     )

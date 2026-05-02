@@ -52,10 +52,167 @@ std::unordered_map<string, std::vector<XmlaColumn>> schema_cache;
 
 static constexpr int64_t DEFAULT_METADATA_CACHE_TTL_SECONDS = 24 * 60 * 60;
 static constexpr const char *TARGET_CACHE_VERSION =
-    "pbi_scanner_target_cache_v1";
+    "pbi_scanner_target_cache_v3";
 static constexpr const char *SCHEMA_CACHE_VERSION =
     "pbi_scanner_schema_cache_v1";
 static constexpr const char *CACHE_FORMAT_VERSION = "v1";
+static constexpr int64_t DEFAULT_SCHEMA_PROBE_ROWS = 100;
+
+static bool IsDaxIdentifierChar(char ch) {
+  return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+static bool KeywordAt(const string &statement, idx_t position,
+                      const string &keyword) {
+  if (position + keyword.size() > statement.size()) {
+    return false;
+  }
+  for (idx_t i = 0; i < keyword.size(); i++) {
+    if (std::toupper(static_cast<unsigned char>(statement[position + i])) !=
+        std::toupper(static_cast<unsigned char>(keyword[i]))) {
+      return false;
+    }
+  }
+  if (position > 0 && IsDaxIdentifierChar(statement[position - 1])) {
+    return false;
+  }
+  auto end = position + keyword.size();
+  return end >= statement.size() || !IsDaxIdentifierChar(statement[end]);
+}
+
+static idx_t FindDaxKeywordOutsideLiterals(const string &statement,
+                                           const string &keyword,
+                                           idx_t start_position,
+                                           bool top_level_only) {
+  bool in_string = false;
+  bool in_double_string = false;
+  bool in_bracket_identifier = false;
+  idx_t paren_depth = 0;
+  for (idx_t i = start_position; i < statement.size(); i++) {
+    auto ch = statement[i];
+    if (in_string) {
+      if (ch == '\'' && i + 1 < statement.size() && statement[i + 1] == '\'') {
+        i++;
+      } else if (ch == '\'') {
+        in_string = false;
+      }
+      continue;
+    }
+    if (in_double_string) {
+      if (ch == '"' && i + 1 < statement.size() && statement[i + 1] == '"') {
+        i++;
+      } else if (ch == '"') {
+        in_double_string = false;
+      }
+      continue;
+    }
+    if (in_bracket_identifier) {
+      if (ch == ']') {
+        in_bracket_identifier = false;
+      }
+      continue;
+    }
+    if (ch == '\'') {
+      in_string = true;
+      continue;
+    }
+    if (ch == '"') {
+      in_double_string = true;
+      continue;
+    }
+    if (ch == '[') {
+      in_bracket_identifier = true;
+      continue;
+    }
+    if (ch == '/' && i + 1 < statement.size() && statement[i + 1] == '/') {
+      while (i < statement.size() && statement[i] != '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '-' && i + 1 < statement.size() && statement[i + 1] == '-') {
+      while (i < statement.size() && statement[i] != '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '/' && i + 1 < statement.size() && statement[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < statement.size() &&
+             !(statement[i] == '*' && statement[i + 1] == '/')) {
+        i++;
+      }
+      if (i + 1 < statement.size()) {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '(') {
+      paren_depth++;
+      continue;
+    }
+    if (ch == ')' && paren_depth > 0) {
+      paren_depth--;
+      continue;
+    }
+    if ((!top_level_only || paren_depth == 0) &&
+        KeywordAt(statement, i, keyword)) {
+      return i;
+    }
+  }
+  return DConstants::INVALID_INDEX;
+}
+
+static string BuildLimitedDaxSchemaProbe(const string &statement,
+                                         int64_t row_limit) {
+  if (row_limit <= 0) {
+    return statement;
+  }
+  auto evaluate_pos =
+      FindDaxKeywordOutsideLiterals(statement, "EVALUATE", 0, false);
+  if (evaluate_pos == DConstants::INVALID_INDEX) {
+    return statement;
+  }
+  auto expression_start = evaluate_pos + string("EVALUATE").size();
+  auto second_evaluate = FindDaxKeywordOutsideLiterals(statement, "EVALUATE",
+                                                       expression_start, false);
+  if (second_evaluate != DConstants::INVALID_INDEX) {
+    return statement;
+  }
+
+  auto order_by_pos = FindDaxKeywordOutsideLiterals(statement, "ORDER BY",
+                                                    expression_start, true);
+  auto start_at_pos = FindDaxKeywordOutsideLiterals(statement, "START AT",
+                                                    expression_start, true);
+  auto expression_end = statement.size();
+  if (order_by_pos != DConstants::INVALID_INDEX) {
+    expression_end = MinValue<idx_t>(expression_end, order_by_pos);
+  }
+  if (start_at_pos != DConstants::INVALID_INDEX) {
+    expression_end = MinValue<idx_t>(expression_end, start_at_pos);
+  }
+
+  auto table_expression =
+      statement.substr(expression_start, expression_end - expression_start);
+  StringUtil::Trim(table_expression);
+  if (table_expression.empty() || KeywordAt(table_expression, 0, "VAR")) {
+    return statement;
+  }
+
+  auto prefix = statement.substr(0, evaluate_pos);
+  string probe;
+  probe.reserve(statement.size() + 32);
+  probe += prefix;
+  if (!probe.empty() && probe.back() != '\n' && probe.back() != '\r') {
+    probe += "\n";
+  }
+  probe += "EVALUATE TOPN(";
+  probe += std::to_string(row_limit);
+  probe += ", ";
+  probe += table_expression;
+  probe += ")";
+  return probe;
+}
 
 static string TargetCacheKey(const PowerBIConnectionConfig &config) {
   return config.data_source + "\n" + config.initial_catalog;
@@ -551,18 +708,20 @@ static bool TryReadPersistentTarget(const string &key,
       return false;
     }
     auto fields = SplitCacheLine(line);
-    if (fields.size() != 9) {
+    if (fields.size() != 11) {
       return false;
     }
     cached.workspace_name = fields[0];
     cached.workspace_id = fields[1];
     cached.workspace_type = fields[2];
     cached.capacity_object_id = fields[3];
-    cached.dataset_name = fields[4];
-    cached.dataset_id = fields[5];
-    cached.internal_catalog = fields[6];
-    cached.aixl_url = fields[7];
-    cached.fixed_cluster_uri = fields[8];
+    cached.capacity_uri = fields[4];
+    cached.dataset_name = fields[5];
+    cached.dataset_id = fields[6];
+    cached.internal_catalog = fields[7];
+    cached.aixl_url = fields[8];
+    cached.fixed_cluster_uri = fields[9];
+    cached.core_server_name = fields[10];
     if (cached.internal_catalog.empty() || cached.aixl_url.empty()) {
       return false;
     }
@@ -597,8 +756,9 @@ static void StorePersistentTarget(const string &key,
         {CACHE_FORMAT_VERSION, std::to_string(CurrentUnixSeconds()), key});
     output << CacheLine(
         {target.workspace_name, target.workspace_id, target.workspace_type,
-         target.capacity_object_id, target.dataset_name, target.dataset_id,
-         target.internal_catalog, target.aixl_url, target.fixed_cluster_uri});
+         target.capacity_object_id, target.capacity_uri, target.dataset_name,
+         target.dataset_id, target.internal_catalog, target.aixl_url,
+         target.fixed_cluster_uri, target.core_server_name});
   } catch (const Exception &ex) {
     if (DebugTimingsEnabled()) {
       std::fprintf(stderr,
@@ -813,6 +973,11 @@ static void InvalidateCachedSchema(const PowerBIResolvedTarget &target,
 
 } // namespace
 
+std::string BuildDaxSchemaProbeForTesting(const std::string &statement,
+                                          int64_t row_limit) {
+  return BuildLimitedDaxSchemaProbe(statement, row_limit);
+}
+
 bool TestMetadataCacheRoundTrip() {
   auto escaped = CacheLine({"ExampleTable[Example Key]", "xsd:long", "BIGINT",
                             "3", "1", "1", "contains\ttab\nnewline%percent"});
@@ -852,16 +1017,23 @@ bool TestMetadataCacheRoundTrip() {
   return true;
 }
 
+static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
+                                  const string &message);
+
 struct DaxQueryBindData : public TableFunctionData {
   DaxQueryBindData(PowerBIConnectionConfig config_p,
                    PowerBIResolvedTarget target_p,
                    std::vector<XmlaColumn> columns_p, string dax_text_p,
-                   string access_token_p, string effective_user_name_p,
-                   int64_t timeout_ms_p,
+                   string xmla_catalog_p, string xmla_auth_scheme_p,
+                   string access_token_p, string power_bi_aad_token_p,
+                   string effective_user_name_p, int64_t timeout_ms_p,
                    std::shared_ptr<HttpClient> xmla_http_client_p = nullptr)
       : config(std::move(config_p)), target(std::move(target_p)),
         columns(std::move(columns_p)), dax_text(std::move(dax_text_p)),
+        xmla_catalog(std::move(xmla_catalog_p)),
+        xmla_auth_scheme(std::move(xmla_auth_scheme_p)),
         access_token(std::move(access_token_p)),
+        power_bi_aad_token(std::move(power_bi_aad_token_p)),
         effective_user_name(std::move(effective_user_name_p)),
         timeout_ms(timeout_ms_p),
         xmla_http_client(std::move(xmla_http_client_p)) {}
@@ -874,7 +1046,10 @@ struct DaxQueryBindData : public TableFunctionData {
     auto &other = other_p.Cast<DaxQueryBindData>();
     return config.raw == other.config.raw &&
            target.aixl_url == other.target.aixl_url &&
-           dax_text == other.dax_text && access_token == other.access_token &&
+           dax_text == other.dax_text && xmla_catalog == other.xmla_catalog &&
+           xmla_auth_scheme == other.xmla_auth_scheme &&
+           access_token == other.access_token &&
+           power_bi_aad_token == other.power_bi_aad_token &&
            effective_user_name == other.effective_user_name &&
            timeout_ms == other.timeout_ms;
   }
@@ -883,7 +1058,12 @@ struct DaxQueryBindData : public TableFunctionData {
   PowerBIResolvedTarget target;
   std::vector<XmlaColumn> columns;
   string dax_text;
+  string xmla_catalog;
+  string xmla_auth_scheme;
+  //! XMLA Authorization token (MWC AS token or Azure AD Bearer).
   string access_token;
+  //! Azure AD token used for Power BI REST + generateastoken (MWC refresh).
+  string power_bi_aad_token;
   string effective_user_name;
   int64_t timeout_ms;
   //! Populated when ProbeSchema ran; reused for execute on same TCP connection.
@@ -893,13 +1073,17 @@ struct DaxQueryBindData : public TableFunctionData {
 struct DaxQueryGlobalState : public GlobalTableFunctionState {
   explicit DaxQueryGlobalState(const DaxQueryBindData &bind_data)
       : columns(bind_data.columns), bind_config(bind_data.config),
-        bind_target(bind_data.target) {
+        bind_target(bind_data.target),
+        power_bi_aad_token(bind_data.power_bi_aad_token) {
     for (const auto &column : columns) {
       column_types.push_back(column.duckdb_type);
     }
     request.url = bind_data.target.aixl_url;
-    request.catalog = bind_data.target.internal_catalog;
+    request.catalog = bind_data.xmla_catalog;
+    request.auth_scheme = bind_data.xmla_auth_scheme;
     request.access_token = bind_data.access_token;
+    request.xmla_server = bind_data.target.core_server_name;
+    request.xmla_workspace_id = bind_data.target.workspace_id;
     request.statement = bind_data.dax_text;
     request.effective_user_name = bind_data.effective_user_name;
     request.timeout_ms = bind_data.timeout_ms;
@@ -958,6 +1142,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   std::unique_ptr<XmlaExecutor> executor;
   PowerBIConnectionConfig bind_config;
   PowerBIResolvedTarget bind_target;
+  string power_bi_aad_token;
   std::mutex lock;
   std::condition_variable condition;
   std::deque<unique_ptr<DataChunk>> chunks;
@@ -1003,6 +1188,9 @@ private:
     bool first_row_logged = false;
     auto current_chunk = CreateChunk();
     idx_t current_chunk_size = 0;
+    bool retried_mwc_execute = false;
+    bool retried_legacy_bearer_execute = false;
+  retry_execute:
     try {
       executor->ExecuteStreaming(
           request, &columns, nullptr,
@@ -1041,6 +1229,58 @@ private:
         }
       }
     } catch (const Exception &ex) {
+      if (!retried_mwc_execute &&
+          IsMwcXmlaUnauthorized(request.auth_scheme, ex.what()) &&
+          !power_bi_aad_token.empty() &&
+          !bind_target.capacity_object_id.empty()) {
+        retried_mwc_execute = true;
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
+                               "refreshing AS token and retrying once\n");
+        }
+        request.access_token = GeneratePowerBIXmlaToken(
+            bind_config.endpoint, bind_target, power_bi_aad_token,
+            request.timeout_ms, true);
+        executor = make_uniq<XmlaExecutor>(request.timeout_ms);
+        current_chunk = CreateChunk();
+        current_chunk_size = 0;
+        goto retry_execute;
+      }
+      if (!retried_legacy_bearer_execute &&
+          IsMwcXmlaUnauthorized(request.auth_scheme, ex.what()) &&
+          !power_bi_aad_token.empty() &&
+          !bind_target.capacity_object_id.empty()) {
+        retried_legacy_bearer_execute = true;
+        try {
+          if (DebugTimingsEnabled()) {
+            std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
+                                 "retrying legacy Bearer XMLA path\n");
+          }
+          request.url = ResolveLegacyPowerBIXmlaUrl(
+              bind_config.endpoint, bind_target, power_bi_aad_token,
+              request.timeout_ms);
+          request.catalog = bind_target.internal_catalog;
+          request.auth_scheme = "Bearer";
+          request.access_token = power_bi_aad_token;
+          request.xmla_server.clear();
+          executor = make_uniq<XmlaExecutor>(request.timeout_ms);
+          current_chunk = CreateChunk();
+          current_chunk_size = 0;
+          goto retry_execute;
+        } catch (const Exception &retry_ex) {
+          std::lock_guard<std::mutex> guard(lock);
+          error = retry_ex.what();
+        } catch (const std::exception &retry_ex) {
+          std::lock_guard<std::mutex> guard(lock);
+          error = retry_ex.what();
+        }
+        InvalidateCachedSchema(bind_target, request.statement,
+                               request.effective_user_name);
+        if (!bind_config.is_direct_xmla) {
+          InvalidateCachedTarget(bind_config);
+        }
+        goto finish_worker;
+      }
       InvalidateCachedSchema(bind_target, request.statement,
                              request.effective_user_name);
       if (!bind_config.is_direct_xmla) {
@@ -1057,6 +1297,7 @@ private:
       std::lock_guard<std::mutex> guard(lock);
       error = ex.what();
     }
+  finish_worker:
     if (DebugTimingsEnabled()) {
       DebugTiming("ExecuteStreaming total", worker_start);
       std::fprintf(stderr, "[pbi_scanner] dax_query rows: %llu\n",
@@ -1097,6 +1338,31 @@ static int64_t ResolveTimeoutMs(const PowerBIConnectionConfig &config,
   return 300000;
 }
 
+static int64_t
+ResolveSchemaProbeRows(const named_parameter_map_t &named_parameters) {
+  if (HasNonNullNamedParameter(named_parameters, "schema_probe_rows")) {
+    auto entry = named_parameters.find("schema_probe_rows");
+    auto row_limit = entry->second.GetValue<int64_t>();
+    if (row_limit < 0) {
+      throw InvalidInputException("schema_probe_rows must be zero or greater");
+    }
+    return row_limit;
+  }
+  auto *raw_value = std::getenv("PBI_SCANNER_SCHEMA_PROBE_ROWS");
+  if (!raw_value || !*raw_value) {
+    return DEFAULT_SCHEMA_PROBE_ROWS;
+  }
+  try {
+    auto row_limit = std::stoll(raw_value);
+    if (row_limit < 0) {
+      return DEFAULT_SCHEMA_PROBE_ROWS;
+    }
+    return row_limit;
+  } catch (const std::exception &) {
+    return DEFAULT_SCHEMA_PROBE_ROWS;
+  }
+}
+
 static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["auth_mode"] = LogicalType::VARCHAR;
   function.named_parameters["access_token"] = LogicalType::VARCHAR;
@@ -1106,6 +1372,60 @@ static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["client_secret"] = LogicalType::VARCHAR;
   function.named_parameters["effective_user_name"] = LogicalType::VARCHAR;
   function.named_parameters["timeout_ms"] = LogicalType::BIGINT;
+  function.named_parameters["schema_probe_rows"] = LogicalType::BIGINT;
+}
+
+static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
+                                  const string &message) {
+  return xmla_auth_scheme == "MwcToken" &&
+         StringUtil::Lower(message).find("http 401") != string::npos;
+}
+
+static void FallbackToLegacyBearerXmla(const PowerBIConnectionConfig &config,
+                                       PowerBIResolvedTarget &target,
+                                       const string &access_token,
+                                       int64_t timeout_ms, string &xmla_catalog,
+                                       string &xmla_auth_scheme,
+                                       string &xmla_access_token) {
+  target.aixl_url = ResolveLegacyPowerBIXmlaUrl(config.endpoint, target,
+                                                access_token, timeout_ms);
+  target.core_server_name.clear();
+  xmla_catalog = target.internal_catalog;
+  xmla_auth_scheme = "Bearer";
+  xmla_access_token = access_token;
+}
+
+//! Sets catalog, auth scheme, and token for a resolved Power BI target (not
+//! direct XMLA). Capacity-backed targets use dataset catalog + MWC token.
+static void ApplyXmlaAuthForResolvedPowerBiTarget(
+    const PowerBIConnectionConfig &config, const PowerBIResolvedTarget &target,
+    const string &access_token, int64_t timeout_ms, string &xmla_catalog,
+    string &xmla_auth_scheme, string &xmla_access_token) {
+  if (!target.capacity_object_id.empty()) {
+    xmla_catalog = target.dataset_name;
+    auto xmla_token_start = std::chrono::steady_clock::now();
+    xmla_access_token = GeneratePowerBIXmlaToken(config.endpoint, target,
+                                                 access_token, timeout_ms);
+    DebugTiming("GeneratePowerBIXmlaToken", xmla_token_start);
+    xmla_auth_scheme = "MwcToken";
+  } else {
+    xmla_catalog = target.internal_catalog;
+    xmla_auth_scheme = "Bearer";
+    xmla_access_token = access_token;
+  }
+}
+
+//! Full retry is only for SOAP fault-style probe failures (TOPN may be
+//! rejected). Transport, HTTP, and interrupts must not trigger a second probe.
+static bool LimitedSchemaProbeFailureAllowsFullRetry(const Exception &ex) {
+  auto msg = StringUtil::Lower(string(ex.what()));
+  if (msg.find("request failed") != string::npos) {
+    return false;
+  }
+  if (msg.find("xmla schema probe http") != string::npos) {
+    return false;
+  }
+  return msg.find("xmla schema probe failed") != string::npos;
 }
 
 static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
@@ -1127,14 +1447,18 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
 
   auto bind_start = std::chrono::steady_clock::now();
   auto access_token_start = std::chrono::steady_clock::now();
-  auto access_token =
+  auto power_bi_aad_token =
       ResolvePowerBIAccessToken(context, config, input.named_parameters);
   DebugTiming("ResolvePowerBIAccessToken", access_token_start);
   auto effective_user_name =
       ResolveEffectiveUserName(config, input.named_parameters);
   auto timeout_ms = ResolveTimeoutMs(config, input.named_parameters);
+  auto schema_probe_rows = ResolveSchemaProbeRows(input.named_parameters);
   PowerBIResolvedTarget target;
   bool target_from_cache = false;
+  string xmla_catalog;
+  string xmla_auth_scheme = "Bearer";
+  string xmla_access_token = power_bi_aad_token;
   if (config.is_direct_xmla) {
     target.aixl_url = config.data_source;
     target.internal_catalog = config.initial_catalog;
@@ -1143,23 +1467,37 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     if (!target_from_cache) {
       auto resolver_start = std::chrono::steady_clock::now();
       target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                    access_token, timeout_ms);
+                                    power_bi_aad_token, timeout_ms);
       DebugTiming("ResolvePowerBITarget", resolver_start);
       StoreCachedTarget(config, target);
     }
+    ApplyXmlaAuthForResolvedPowerBiTarget(config, target, power_bi_aad_token,
+                                          timeout_ms, xmla_catalog,
+                                          xmla_auth_scheme, xmla_access_token);
+  }
+  if (xmla_catalog.empty()) {
+    xmla_catalog = target.internal_catalog;
   }
 
   std::shared_ptr<HttpClient> xmla_http_client;
   std::vector<XmlaColumn> columns;
   if (!TryGetCachedSchema(target, dax_text, effective_user_name, columns)) {
-    auto probe_schema = [&]() {
+    auto full_probe_statement = dax_text;
+    auto limited_probe_statement =
+        BuildLimitedDaxSchemaProbe(dax_text, schema_probe_rows);
+    auto limited_probe_available =
+        limited_probe_statement != full_probe_statement;
+    auto probe_schema = [&](const string &probe_statement) {
       xmla_http_client = std::make_shared<HttpClient>(timeout_ms);
       XmlaExecutor executor(timeout_ms, xmla_http_client);
       XmlaRequest request;
       request.url = target.aixl_url;
-      request.catalog = target.internal_catalog;
-      request.access_token = access_token;
-      request.statement = dax_text;
+      request.catalog = xmla_catalog;
+      request.auth_scheme = xmla_auth_scheme;
+      request.access_token = xmla_access_token;
+      request.xmla_server = target.core_server_name;
+      request.xmla_workspace_id = target.workspace_id;
+      request.statement = probe_statement;
       request.effective_user_name = effective_user_name;
       request.timeout_ms = timeout_ms;
       auto probe_start = std::chrono::steady_clock::now();
@@ -1167,32 +1505,78 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
       DebugTiming("ProbeSchema", probe_start);
       return probed_columns;
     };
+    auto probe_schema_with_fallback = [&]() {
+      if (!limited_probe_available) {
+        return probe_schema(full_probe_statement);
+      }
+      try {
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] limited schema probe rows: %lld\n",
+                       static_cast<long long>(schema_probe_rows));
+        }
+        return probe_schema(limited_probe_statement);
+      } catch (const InterruptException &) {
+        throw;
+      } catch (const Exception &ex) {
+        if (!LimitedSchemaProbeFailureAllowsFullRetry(ex)) {
+          throw;
+        }
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] limited schema probe failed, retrying "
+                       "full probe: %s\n",
+                       ex.what());
+        }
+        return probe_schema(full_probe_statement);
+      }
+    };
     try {
-      columns = probe_schema();
-    } catch (const Exception &) {
-      if (config.is_direct_xmla || !target_from_cache) {
-        throw;
+      columns = probe_schema_with_fallback();
+    } catch (const Exception &ex) {
+      if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
+        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
+                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
+                                   xmla_access_token);
+        columns = probe_schema_with_fallback();
+      } else {
+        if (config.is_direct_xmla || !target_from_cache) {
+          throw;
+        }
+        InvalidateCachedTarget(config);
+        target_from_cache = false;
+        auto resolver_start = std::chrono::steady_clock::now();
+        target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
+                                      power_bi_aad_token, timeout_ms);
+        DebugTiming("ResolvePowerBITarget retry", resolver_start);
+        StoreCachedTarget(config, target);
+        ApplyXmlaAuthForResolvedPowerBiTarget(
+            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
+            xmla_auth_scheme, xmla_access_token);
+        columns = probe_schema_with_fallback();
       }
-      InvalidateCachedTarget(config);
-      target_from_cache = false;
-      auto resolver_start = std::chrono::steady_clock::now();
-      target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                    access_token, timeout_ms);
-      DebugTiming("ResolvePowerBITarget retry", resolver_start);
-      StoreCachedTarget(config, target);
-      columns = probe_schema();
-    } catch (const std::exception &) {
-      if (config.is_direct_xmla || !target_from_cache) {
-        throw;
+    } catch (const std::exception &ex) {
+      if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
+        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
+                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
+                                   xmla_access_token);
+        columns = probe_schema_with_fallback();
+      } else {
+        if (config.is_direct_xmla || !target_from_cache) {
+          throw;
+        }
+        InvalidateCachedTarget(config);
+        target_from_cache = false;
+        auto resolver_start = std::chrono::steady_clock::now();
+        target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
+                                      power_bi_aad_token, timeout_ms);
+        DebugTiming("ResolvePowerBITarget retry", resolver_start);
+        StoreCachedTarget(config, target);
+        ApplyXmlaAuthForResolvedPowerBiTarget(
+            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
+            xmla_auth_scheme, xmla_access_token);
+        columns = probe_schema_with_fallback();
       }
-      InvalidateCachedTarget(config);
-      target_from_cache = false;
-      auto resolver_start = std::chrono::steady_clock::now();
-      target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                    access_token, timeout_ms);
-      DebugTiming("ResolvePowerBITarget retry", resolver_start);
-      StoreCachedTarget(config, target);
-      columns = probe_schema();
     }
     StoreCachedSchema(target, dax_text, effective_user_name, columns);
   }
@@ -1208,7 +1592,8 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
 
   return make_uniq<DaxQueryBindData>(
       std::move(config), std::move(target), std::move(columns),
-      std::move(dax_text), std::move(access_token),
+      std::move(dax_text), std::move(xmla_catalog), std::move(xmla_auth_scheme),
+      std::move(xmla_access_token), std::move(power_bi_aad_token),
       std::move(effective_user_name), timeout_ms, std::move(xmla_http_client));
 }
 
