@@ -2,6 +2,9 @@
 
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/types/date.hpp"
+#if __has_include("duckdb/common/vector/string_vector.hpp")
+#include "duckdb/common/vector/string_vector.hpp"
+#endif
 #if __has_include("duckdb/common/vector/flat_vector.hpp")
 #include "duckdb/common/vector/flat_vector.hpp"
 #define PBI_SCANNER_HAS_FLAT_VECTOR_GET_DATA_MUTABLE 1
