@@ -11,8 +11,5 @@ TableFunction CreatePbiTablesFunction();
 TableFunction CreatePbiColumnsFunction();
 TableFunction CreatePbiMeasuresFunction();
 TableFunction CreatePbiRelationshipsFunction();
-bool TestMetadataCacheRoundTrip();
-std::string BuildDaxSchemaProbeForTesting(const std::string &statement,
-                                          int64_t row_limit);
 
 } // namespace duckdb

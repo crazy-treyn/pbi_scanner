@@ -19,6 +19,13 @@ WHERE function_name = 'dax_query';
 1
 
 query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_tables', 'pbi_columns', 'pbi_measures', 'pbi_relationships');
+----
+4
+
+query I
 SELECT __pbi_scanner_test_parse_chunked_double(
     '<?xml version="1.0" encoding="utf-8"?><root><schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:schema><xsd:complexType name="row"><xsd:sequence><xsd:element name="Rate" type="xsd:double" /></xsd:sequence></xsd:complexType></xsd:schema></schema><row><Rate>1.125E2</Ra',
     'te></row></root>'
@@ -208,6 +215,55 @@ FROM dax_query(
 );
 ----
 Data Source is required
+
+statement error
+SELECT *
+FROM dax_query(
+    '',
+    'EVALUATE ROW("x", 1)'
+);
+----
+connection_string is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+Initial Catalog is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    ''
+);
+----
+dax_text is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)',
+    access_token := 'dummy',
+    timeout_ms := 0
+);
+----
+timeout_ms must be greater than zero
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)',
+    access_token := 'dummy',
+    schema_probe_rows := -1
+);
+----
+schema_probe_rows must be zero or greater
 
 statement error
 SELECT *
