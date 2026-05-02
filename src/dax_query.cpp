@@ -1251,21 +1251,35 @@ private:
           !power_bi_aad_token.empty() &&
           !bind_target.capacity_object_id.empty()) {
         retried_legacy_bearer_execute = true;
-        if (DebugTimingsEnabled()) {
-          std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
-                               "retrying legacy Bearer XMLA path\n");
+        try {
+          if (DebugTimingsEnabled()) {
+            std::fprintf(stderr, "[pbi_scanner] MWC XMLA execute returned 401; "
+                                 "retrying legacy Bearer XMLA path\n");
+          }
+          request.url = ResolveLegacyPowerBIXmlaUrl(
+              bind_config.endpoint, bind_target, power_bi_aad_token,
+              request.timeout_ms);
+          request.catalog = bind_target.internal_catalog;
+          request.auth_scheme = "Bearer";
+          request.access_token = power_bi_aad_token;
+          request.xmla_server.clear();
+          executor = make_uniq<XmlaExecutor>(request.timeout_ms);
+          current_chunk = CreateChunk();
+          current_chunk_size = 0;
+          goto retry_execute;
+        } catch (const Exception &retry_ex) {
+          std::lock_guard<std::mutex> guard(lock);
+          error = retry_ex.what();
+        } catch (const std::exception &retry_ex) {
+          std::lock_guard<std::mutex> guard(lock);
+          error = retry_ex.what();
         }
-        request.url =
-            ResolveLegacyPowerBIXmlaUrl(bind_config.endpoint, bind_target,
-                                        power_bi_aad_token, request.timeout_ms);
-        request.catalog = bind_target.internal_catalog;
-        request.auth_scheme = "Bearer";
-        request.access_token = power_bi_aad_token;
-        request.xmla_server.clear();
-        executor = make_uniq<XmlaExecutor>(request.timeout_ms);
-        current_chunk = CreateChunk();
-        current_chunk_size = 0;
-        goto retry_execute;
+        InvalidateCachedSchema(bind_target, request.statement,
+                               request.effective_user_name);
+        if (!bind_config.is_direct_xmla) {
+          InvalidateCachedTarget(bind_config);
+        }
+        goto finish_worker;
       }
       InvalidateCachedSchema(bind_target, request.statement,
                              request.effective_user_name);
@@ -1283,6 +1297,7 @@ private:
       std::lock_guard<std::mutex> guard(lock);
       error = ex.what();
     }
+  finish_worker:
     if (DebugTimingsEnabled()) {
       DebugTiming("ExecuteStreaming total", worker_start);
       std::fprintf(stderr, "[pbi_scanner] dax_query rows: %llu\n",
