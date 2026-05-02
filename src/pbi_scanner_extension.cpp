@@ -219,6 +219,17 @@ static void EffectiveExecutionTransportTestFunction(DataChunk &args,
       });
 }
 
+static void DaxSchemaProbeTestFunction(DataChunk &args, ExpressionState &state,
+                                       Vector &result) {
+  BinaryExecutor::Execute<string_t, int64_t, string_t>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t statement, int64_t row_limit) {
+        auto probe =
+            BuildDaxSchemaProbeForTesting(statement.GetString(), row_limit);
+        return StringVector::AddString(result, probe);
+      });
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
   auto &config = loader.GetDatabaseInstance().config;
   config.AddExtensionOption("pbi_scanner_auth_mode",
@@ -265,6 +276,10 @@ static void LoadInternal(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_effective_execution_transport",
                      {LogicalType::VARCHAR}, LogicalType::VARCHAR,
                      EffectiveExecutionTransportTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_dax_schema_probe",
+                     {LogicalType::VARCHAR, LogicalType::BIGINT},
+                     LogicalType::VARCHAR, DaxSchemaProbeTestFunction));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

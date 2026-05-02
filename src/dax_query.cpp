@@ -56,6 +56,163 @@ static constexpr const char *TARGET_CACHE_VERSION =
 static constexpr const char *SCHEMA_CACHE_VERSION =
     "pbi_scanner_schema_cache_v1";
 static constexpr const char *CACHE_FORMAT_VERSION = "v1";
+static constexpr int64_t DEFAULT_SCHEMA_PROBE_ROWS = 100;
+
+static bool IsDaxIdentifierChar(char ch) {
+  return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+static bool KeywordAt(const string &statement, idx_t position,
+                      const string &keyword) {
+  if (position + keyword.size() > statement.size()) {
+    return false;
+  }
+  for (idx_t i = 0; i < keyword.size(); i++) {
+    if (std::toupper(static_cast<unsigned char>(statement[position + i])) !=
+        std::toupper(static_cast<unsigned char>(keyword[i]))) {
+      return false;
+    }
+  }
+  if (position > 0 && IsDaxIdentifierChar(statement[position - 1])) {
+    return false;
+  }
+  auto end = position + keyword.size();
+  return end >= statement.size() || !IsDaxIdentifierChar(statement[end]);
+}
+
+static idx_t FindDaxKeywordOutsideLiterals(const string &statement,
+                                           const string &keyword,
+                                           idx_t start_position,
+                                           bool top_level_only) {
+  bool in_string = false;
+  bool in_double_string = false;
+  bool in_bracket_identifier = false;
+  idx_t paren_depth = 0;
+  for (idx_t i = start_position; i < statement.size(); i++) {
+    auto ch = statement[i];
+    if (in_string) {
+      if (ch == '\'' && i + 1 < statement.size() && statement[i + 1] == '\'') {
+        i++;
+      } else if (ch == '\'') {
+        in_string = false;
+      }
+      continue;
+    }
+    if (in_double_string) {
+      if (ch == '"' && i + 1 < statement.size() && statement[i + 1] == '"') {
+        i++;
+      } else if (ch == '"') {
+        in_double_string = false;
+      }
+      continue;
+    }
+    if (in_bracket_identifier) {
+      if (ch == ']') {
+        in_bracket_identifier = false;
+      }
+      continue;
+    }
+    if (ch == '\'') {
+      in_string = true;
+      continue;
+    }
+    if (ch == '"') {
+      in_double_string = true;
+      continue;
+    }
+    if (ch == '[') {
+      in_bracket_identifier = true;
+      continue;
+    }
+    if (ch == '/' && i + 1 < statement.size() && statement[i + 1] == '/') {
+      while (i < statement.size() && statement[i] != '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '-' && i + 1 < statement.size() && statement[i + 1] == '-') {
+      while (i < statement.size() && statement[i] != '\n') {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '/' && i + 1 < statement.size() && statement[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < statement.size() &&
+             !(statement[i] == '*' && statement[i + 1] == '/')) {
+        i++;
+      }
+      if (i + 1 < statement.size()) {
+        i++;
+      }
+      continue;
+    }
+    if (ch == '(') {
+      paren_depth++;
+      continue;
+    }
+    if (ch == ')' && paren_depth > 0) {
+      paren_depth--;
+      continue;
+    }
+    if ((!top_level_only || paren_depth == 0) &&
+        KeywordAt(statement, i, keyword)) {
+      return i;
+    }
+  }
+  return DConstants::INVALID_INDEX;
+}
+
+static string BuildLimitedDaxSchemaProbe(const string &statement,
+                                         int64_t row_limit) {
+  if (row_limit <= 0) {
+    return statement;
+  }
+  auto evaluate_pos =
+      FindDaxKeywordOutsideLiterals(statement, "EVALUATE", 0, false);
+  if (evaluate_pos == DConstants::INVALID_INDEX) {
+    return statement;
+  }
+  auto expression_start = evaluate_pos + string("EVALUATE").size();
+  auto second_evaluate = FindDaxKeywordOutsideLiterals(statement, "EVALUATE",
+                                                       expression_start, false);
+  if (second_evaluate != DConstants::INVALID_INDEX) {
+    return statement;
+  }
+
+  auto order_by_pos = FindDaxKeywordOutsideLiterals(statement, "ORDER BY",
+                                                    expression_start, true);
+  auto start_at_pos = FindDaxKeywordOutsideLiterals(statement, "START AT",
+                                                    expression_start, true);
+  auto expression_end = statement.size();
+  if (order_by_pos != DConstants::INVALID_INDEX) {
+    expression_end = MinValue<idx_t>(expression_end, order_by_pos);
+  }
+  if (start_at_pos != DConstants::INVALID_INDEX) {
+    expression_end = MinValue<idx_t>(expression_end, start_at_pos);
+  }
+
+  auto table_expression =
+      statement.substr(expression_start, expression_end - expression_start);
+  StringUtil::Trim(table_expression);
+  if (table_expression.empty() || KeywordAt(table_expression, 0, "VAR")) {
+    return statement;
+  }
+
+  auto prefix = statement.substr(0, evaluate_pos);
+  string probe;
+  probe.reserve(statement.size() + 32);
+  probe += prefix;
+  if (!probe.empty() && probe.back() != '\n' && probe.back() != '\r') {
+    probe += "\n";
+  }
+  probe += "EVALUATE TOPN(";
+  probe += std::to_string(row_limit);
+  probe += ", ";
+  probe += table_expression;
+  probe += ")";
+  return probe;
+}
 
 static string TargetCacheKey(const PowerBIConnectionConfig &config) {
   return config.data_source + "\n" + config.initial_catalog;
@@ -816,6 +973,11 @@ static void InvalidateCachedSchema(const PowerBIResolvedTarget &target,
 
 } // namespace
 
+std::string BuildDaxSchemaProbeForTesting(const std::string &statement,
+                                          int64_t row_limit) {
+  return BuildLimitedDaxSchemaProbe(statement, row_limit);
+}
+
 bool TestMetadataCacheRoundTrip() {
   auto escaped = CacheLine({"ExampleTable[Example Key]", "xsd:long", "BIGINT",
                             "3", "1", "1", "contains\ttab\nnewline%percent"});
@@ -1110,6 +1272,31 @@ static int64_t ResolveTimeoutMs(const PowerBIConnectionConfig &config,
   return 300000;
 }
 
+static int64_t
+ResolveSchemaProbeRows(const named_parameter_map_t &named_parameters) {
+  if (HasNonNullNamedParameter(named_parameters, "schema_probe_rows")) {
+    auto entry = named_parameters.find("schema_probe_rows");
+    auto row_limit = entry->second.GetValue<int64_t>();
+    if (row_limit < 0) {
+      throw InvalidInputException("schema_probe_rows must be zero or greater");
+    }
+    return row_limit;
+  }
+  auto *raw_value = std::getenv("PBI_SCANNER_SCHEMA_PROBE_ROWS");
+  if (!raw_value || !*raw_value) {
+    return DEFAULT_SCHEMA_PROBE_ROWS;
+  }
+  try {
+    auto row_limit = std::stoll(raw_value);
+    if (row_limit < 0) {
+      return DEFAULT_SCHEMA_PROBE_ROWS;
+    }
+    return row_limit;
+  } catch (const std::exception &) {
+    return DEFAULT_SCHEMA_PROBE_ROWS;
+  }
+}
+
 static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["auth_mode"] = LogicalType::VARCHAR;
   function.named_parameters["access_token"] = LogicalType::VARCHAR;
@@ -1119,6 +1306,7 @@ static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["client_secret"] = LogicalType::VARCHAR;
   function.named_parameters["effective_user_name"] = LogicalType::VARCHAR;
   function.named_parameters["timeout_ms"] = LogicalType::BIGINT;
+  function.named_parameters["schema_probe_rows"] = LogicalType::BIGINT;
 }
 
 static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
@@ -1166,6 +1354,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   auto effective_user_name =
       ResolveEffectiveUserName(config, input.named_parameters);
   auto timeout_ms = ResolveTimeoutMs(config, input.named_parameters);
+  auto schema_probe_rows = ResolveSchemaProbeRows(input.named_parameters);
   PowerBIResolvedTarget target;
   bool target_from_cache = false;
   string xmla_catalog;
@@ -1199,7 +1388,12 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   std::shared_ptr<HttpClient> xmla_http_client;
   std::vector<XmlaColumn> columns;
   if (!TryGetCachedSchema(target, dax_text, effective_user_name, columns)) {
-    auto probe_schema = [&]() {
+    auto full_probe_statement = dax_text;
+    auto limited_probe_statement =
+        BuildLimitedDaxSchemaProbe(dax_text, schema_probe_rows);
+    auto limited_probe_available =
+        limited_probe_statement != full_probe_statement;
+    auto probe_schema = [&](const string &probe_statement) {
       xmla_http_client = std::make_shared<HttpClient>(timeout_ms);
       XmlaExecutor executor(timeout_ms, xmla_http_client);
       XmlaRequest request;
@@ -1209,7 +1403,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
       request.access_token = xmla_access_token;
       request.xmla_server = target.core_server_name;
       request.xmla_workspace_id = target.workspace_id;
-      request.statement = dax_text;
+      request.statement = probe_statement;
       request.effective_user_name = effective_user_name;
       request.timeout_ms = timeout_ms;
       auto probe_start = std::chrono::steady_clock::now();
@@ -1217,14 +1411,43 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
       DebugTiming("ProbeSchema", probe_start);
       return probed_columns;
     };
+    auto probe_schema_with_fallback = [&]() {
+      if (!limited_probe_available) {
+        return probe_schema(full_probe_statement);
+      }
+      try {
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] limited schema probe rows: %lld\n",
+                       static_cast<long long>(schema_probe_rows));
+        }
+        return probe_schema(limited_probe_statement);
+      } catch (const Exception &ex) {
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] limited schema probe failed, retrying "
+                       "full probe: %s\n",
+                       ex.what());
+        }
+        return probe_schema(full_probe_statement);
+      } catch (const std::exception &ex) {
+        if (DebugTimingsEnabled()) {
+          std::fprintf(stderr,
+                       "[pbi_scanner] limited schema probe failed, retrying "
+                       "full probe: %s\n",
+                       ex.what());
+        }
+        return probe_schema(full_probe_statement);
+      }
+    };
     try {
-      columns = probe_schema();
+      columns = probe_schema_with_fallback();
     } catch (const Exception &ex) {
       if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
         FallbackToLegacyBearerXmla(config, target, access_token, timeout_ms,
                                    xmla_catalog, xmla_auth_scheme,
                                    xmla_access_token);
-        columns = probe_schema();
+        columns = probe_schema_with_fallback();
       } else {
         if (config.is_direct_xmla || !target_from_cache) {
           throw;
@@ -1240,14 +1463,14 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
           xmla_access_token = GeneratePowerBIXmlaToken(
               config.endpoint, target, access_token, timeout_ms);
         }
-        columns = probe_schema();
+        columns = probe_schema_with_fallback();
       }
     } catch (const std::exception &ex) {
       if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
         FallbackToLegacyBearerXmla(config, target, access_token, timeout_ms,
                                    xmla_catalog, xmla_auth_scheme,
                                    xmla_access_token);
-        columns = probe_schema();
+        columns = probe_schema_with_fallback();
       } else {
         if (config.is_direct_xmla || !target_from_cache) {
           throw;
@@ -1263,7 +1486,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
           xmla_access_token = GeneratePowerBIXmlaToken(
               config.endpoint, target, access_token, timeout_ms);
         }
-        columns = probe_schema();
+        columns = probe_schema_with_fallback();
       }
     }
     StoreCachedSchema(target, dax_text, effective_user_name, columns);

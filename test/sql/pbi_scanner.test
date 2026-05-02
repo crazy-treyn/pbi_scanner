@@ -69,6 +69,36 @@ SELECT CAST(__pbi_scanner_test_metadata_cache_roundtrip() AS INTEGER);
 1
 
 query T
+SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE ''Fact Allocation''', 100);
+----
+EVALUATE TOPN(100, 'Fact Allocation')
+
+query T
+SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE ROW("x", 1) ORDER BY [x]', 10);
+----
+EVALUATE TOPN(10, ROW("x", 1))
+
+query T
+SELECT replace(__pbi_scanner_test_dax_schema_probe('DEFINE MEASURE T[m] = 1 EVALUATE SUMMARIZECOLUMNS(T[c], "m", [m])', 5), chr(10), '|');
+----
+DEFINE MEASURE T[m] = 1 |EVALUATE TOPN(5, SUMMARIZECOLUMNS(T[c], "m", [m]))
+
+query T
+SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE ROW("text", "ORDER BY ignored")', 3);
+----
+EVALUATE TOPN(3, ROW("text", "ORDER BY ignored"))
+
+query T
+SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE VAR X = ROW("x", 1) RETURN X', 100);
+----
+EVALUATE VAR X = ROW("x", 1) RETURN X
+
+query T
+SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE ROW("x", 1)', 0);
+----
+EVALUATE ROW("x", 1)
+
+query T
 SELECT __pbi_scanner_test_service_principal_error_message('request_error');
 ----
 service principal token request failed: simulated_request_error
