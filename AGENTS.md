@@ -28,7 +28,7 @@
 - Clang-tidy: `make tidy-check`.
 - Format/tidy targets bootstrap tools with `uv` from `pyproject.toml`; run commands from repo root.
 - macOS OpenSSL fallback when CMake cannot find it: `OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" make release`.
-- Windows fallback when `make` is unavailable: `scripts\dev-win.ps1 configure`, then `scripts\dev-win.ps1 build`, then `scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test`.
+- Windows fallback when `make` is unavailable: `scripts\dev-win.ps1 bootstrap`, then `scripts\dev-win.ps1 build`, then `scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test` (vcpkg-based flow; override with `VCPKG_ROOT`/`VCPKG_TARGET_TRIPLET`).
 
 ## Tests And Live Helpers
 
