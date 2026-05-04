@@ -279,6 +279,15 @@ uv run bench_native_http.py --smoke
 uv run --group bench query_semantic_model_minimal.py
 ```
 
+### Cursor Worktree Setup
+
+If you use Cursor worktrees (`/worktree` or `--worktree`), this repo includes
+`.cursor/worktrees.json` to bootstrap each new worktree automatically:
+
+- Copy `.env` from the root worktree when present (only if the new worktree
+  does not already have one)
+- Run `git submodule update --init --recursive`
+
 ## Platform Notes
 
 ### macOS

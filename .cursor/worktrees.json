@@ -1,0 +1,10 @@
+{
+  "setup-worktree-unix": [
+    "if [ -f \"$ROOT_WORKTREE_PATH/.env\" ] && [ ! -f .env ]; then cp \"$ROOT_WORKTREE_PATH/.env\" .env; fi",
+    "git submodule update --init --recursive"
+  ],
+  "setup-worktree-windows": [
+    "if exist \"%ROOT_WORKTREE_PATH%\\.env\" if not exist \".env\" copy \"%ROOT_WORKTREE_PATH%\\.env\" \".env\"",
+    "git submodule update --init --recursive"
+  ]
+}
