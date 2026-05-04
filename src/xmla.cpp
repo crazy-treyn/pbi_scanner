@@ -1613,6 +1613,22 @@ private:
       return ReadInlineUtf16Value();
     case 0x12:
       return ReadSqlDateTimeValueText();
+    // Legacy SSAS compact scalars (same wire shapes; opcode overlap with other
+    // MS-BINXML type tags in non-cell contexts).
+    case 0x13: {
+      Ensure(2);
+      auto value = static_cast<int16_t>(data[offset] | (data[offset + 1] << 8));
+      offset += 2;
+      return std::to_string(value);
+    }
+    case 0x14:
+      return std::to_string(ReadInt32());
+    case 0x15:
+      return FormatDouble(ReadDouble());
+    case 0x16:
+      return "true";
+    case 0x17:
+      return "false";
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -1681,23 +1697,11 @@ private:
       ParseStartElement();
       return;
     case 0x01:
-      // 0x01 can appear both as a compact start-element token and as a control
-      // marker in some strict SX metadata payloads. Disambiguate by probing the
-      // following varuint as a valid known name id.
-      {
-        uint32_t maybe_name_id = 0;
-        idx_t next_offset = offset;
-        if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
-            (names_by_id.find(maybe_name_id) != names_by_id.end() ||
-             (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
-          ParseStartElement();
-          return;
-        }
-      }
-      // 0x01 is ambiguous: SSAS uses it as a compact start/control marker and
-      // MS-BINXML uses it for SQL-SMALLINT. Only consume it as a scalar when it
-      // immediately follows a pending cell start; otherwise keep the historical
-      // control-marker behavior.
+      // MS-BINXML uses 0x01 for SQL-SMALLINT. SSAS also uses 0x01 as a compact
+      // start/control marker; the following varuint can match a known name id.
+      // When we are in a pending cell, the next bytes are always cell payload —
+      // treat as smallint first so low values (e.g. int16 1 = 0x01 0x00) cannot
+      // be mistaken for name id 1.
       if (pending_start) {
         auto cell_name = pending_start ? pending_name : last_started_name;
         FlushPendingStart();
@@ -1715,6 +1719,17 @@ private:
         }
         sink.Text(text);
         return;
+      }
+      // Disambiguate compact start vs metadata by probing the following varuint.
+      {
+        uint32_t maybe_name_id = 0;
+        idx_t next_offset = offset;
+        if (TryReadVarUIntAt(data, size, offset, maybe_name_id, next_offset) &&
+            (names_by_id.find(maybe_name_id) != names_by_id.end() ||
+             (maybe_name_id >= 1 && maybe_name_id <= names.size()))) {
+          ParseStartElement();
+          return;
+        }
       }
       FlushPendingStart();
       return;
@@ -1739,6 +1754,11 @@ private:
     case SQL_NCHAR_TOKEN:
     case SQL_NVARCHAR_TOKEN:
     case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -1916,6 +1936,7 @@ private:
   }
 
   void ParseAvailable(bool final) {
+    final_parse_pass = final;
     if (!normalized_preamble && (PeekByte() == 0xDF || PeekByte() == 0xB0)) {
       auto state = streaming ? CaptureState() : ParserState();
       try {
@@ -2421,7 +2442,7 @@ private:
       return false;
     }
     if (payload_end == size) {
-      if (streaming) {
+      if (streaming && !final_parse_pass) {
         throw NeedMoreInputException();
       }
       return true;
@@ -2453,6 +2474,18 @@ private:
       return ReadInlineUtf16Value();
     case 0x12:
       return ReadSqlDateTimeValueText();
+    // Legacy SSAS compact scalars (same wire shapes; opcode overlap with other
+    // MS-BINXML type tags in non-cell contexts).
+    case 0x13:
+      return std::to_string(static_cast<int16_t>(ReadUInt16()));
+    case 0x14:
+      return std::to_string(ReadInt32());
+    case 0x15:
+      return FormatDouble(ReadDouble());
+    case 0x16:
+      return "true";
+    case 0x17:
+      return "false";
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -2494,6 +2527,14 @@ private:
       }
       return ValueFromText(FormatDouble(value), coercion_kind);
     }
+    case 0x15: {
+      auto value = ReadDouble();
+      if (coercion_kind == XmlaCoercionKind::DOUBLE ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::DOUBLE(value);
+      }
+      return ValueFromText(FormatDouble(value), coercion_kind);
+    }
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -2527,7 +2568,8 @@ private:
       auto text = ReadSqlDateTimeValueText();
       return ValueFromText(text, coercion_kind);
     }
-    case SQL_SMALLINT_TOKEN: {
+    case SQL_SMALLINT_TOKEN:
+    case 0x13: {
       auto value = static_cast<int16_t>(ReadUInt16());
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
           coercion_kind == XmlaCoercionKind::INFER) {
@@ -2538,7 +2580,8 @@ private:
       }
       return ValueFromText(std::to_string(value), coercion_kind);
     }
-    case SQL_INT_TOKEN: {
+    case SQL_INT_TOKEN:
+    case 0x14: {
       auto value = ReadInt32();
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
           coercion_kind == XmlaCoercionKind::INFER) {
@@ -2571,6 +2614,18 @@ private:
         }
         return ValueFromText("true", coercion_kind);
       }
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(false);
+      }
+      return ValueFromText("false", coercion_kind);
+    case 0x16:
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(true);
+      }
+      return ValueFromText("true", coercion_kind);
+    case 0x17:
       if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
           coercion_kind == XmlaCoercionKind::INFER) {
         return Value::BOOLEAN(false);
@@ -2696,6 +2751,10 @@ private:
       ParseStartElement();
       return;
     case 0x01: {
+      if (pending_start) {
+        ParseText(SQL_SMALLINT_TOKEN);
+        return;
+      }
       uint32_t maybe_name_id = 0;
       idx_t next_offset = offset;
       auto has_name_id =
@@ -2710,14 +2769,6 @@ private:
       if (names_by_id.find(maybe_name_id) != names_by_id.end() ||
           (maybe_name_id >= 1 && maybe_name_id <= names.size())) {
         ParseStartElement();
-        return;
-      }
-      // 0x01 is ambiguous: SSAS uses it as a compact start/control marker and
-      // MS-BINXML uses it for SQL-SMALLINT. Only consume it as a scalar when it
-      // immediately follows a pending cell start; otherwise keep the historical
-      // control-marker behavior.
-      if (pending_start) {
-        ParseText(SQL_SMALLINT_TOKEN);
         return;
       }
       FlushPendingStart();
@@ -2743,6 +2794,11 @@ private:
     case SQL_NCHAR_TOKEN:
     case SQL_NVARCHAR_TOKEN:
     case 0x12:
+    case 0x13:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -2783,6 +2839,7 @@ private:
   bool normalized_preamble = false;
   bool debug_trace_enabled = false;
   bool streaming = false;
+  bool final_parse_pass = false;
   std::string owned_data;
 };
 
