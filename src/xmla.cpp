@@ -12,8 +12,8 @@
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -1222,6 +1222,16 @@ public:
   }
 
 private:
+  static constexpr uint8_t SQL_SMALLINT_TOKEN = 0x01;
+  static constexpr uint8_t SQL_INT_TOKEN = 0x02;
+  static constexpr uint8_t SQL_REAL_TOKEN = 0x03;
+  static constexpr uint8_t SQL_FLOAT_TOKEN = 0x04;
+  static constexpr uint8_t SQL_MONEY_TOKEN = 0x05;
+  static constexpr uint8_t SQL_BIT_TOKEN = 0x06;
+  static constexpr uint8_t SQL_TINYINT_TOKEN = 0x07;
+  static constexpr uint8_t SQL_BIGINT_TOKEN = 0x08;
+  static constexpr uint8_t SQL_NCHAR_TOKEN = 0x0E;
+  static constexpr uint8_t SQL_NVARCHAR_TOKEN = 0x11;
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
   static constexpr idx_t MEASURE_TRACE_LIMIT = 200;
 
@@ -1319,9 +1329,18 @@ private:
     return result;
   }
 
+  int32_t ReadInt32() { return static_cast<int32_t>(ReadUInt32()); }
+
   double ReadDouble() {
     auto raw = ReadUInt64();
     double value;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+  }
+
+  float ReadFloat() {
+    auto raw = ReadUInt32();
+    float value;
     std::memcpy(&value, &raw, sizeof(value));
     return value;
   }
@@ -1347,6 +1366,34 @@ private:
   std::string FormatDouble(double value) const {
     std::ostringstream stream;
     stream << std::setprecision(17) << value;
+    return stream.str();
+  }
+
+  std::string FormatScaledInteger(int64_t raw_value, int32_t scale) const {
+    bool negative = raw_value < 0;
+    uint64_t abs_value;
+    if (negative) {
+      abs_value = static_cast<uint64_t>(-(raw_value + 1)) + 1;
+    } else {
+      abs_value = static_cast<uint64_t>(raw_value);
+    }
+    auto integer_part = abs_value / static_cast<uint64_t>(scale);
+    auto fractional_part = abs_value % static_cast<uint64_t>(scale);
+    std::ostringstream stream;
+    if (negative) {
+      stream << "-";
+    }
+    stream << integer_part;
+    if (fractional_part != 0) {
+      std::string fraction = std::to_string(fractional_part);
+      while (fraction.size() < 4) {
+        fraction.insert(fraction.begin(), '0');
+      }
+      while (!fraction.empty() && fraction.back() == '0') {
+        fraction.pop_back();
+      }
+      stream << "." << fraction;
+    }
     return stream.str();
   }
 
@@ -1469,7 +1516,9 @@ private:
     if (!pending_start) {
       return;
     }
+    std::string pushed_local = pending_name;
     sink.StartElement(std::move(pending_name), std::move(pending_attributes));
+    element_stack.push_back(std::move(pushed_local));
     pending_attributes.clear();
     pending_name.clear();
     pending_start = false;
@@ -1540,34 +1589,48 @@ private:
 
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
-    case 0x04:
+    case SQL_SMALLINT_TOKEN: {
+      Ensure(2);
+      auto value = static_cast<int16_t>(data[offset] | (data[offset + 1] << 8));
+      offset += 2;
+      return std::to_string(value);
+    }
+    case SQL_INT_TOKEN:
+      return std::to_string(ReadInt32());
+    case SQL_REAL_TOKEN:
+      return FormatDouble(ReadFloat());
+    case SQL_FLOAT_TOKEN:
       return FormatDouble(ReadDouble());
-    case 0x08:
+    case SQL_MONEY_TOKEN:
+      return FormatScaledInteger(static_cast<int64_t>(ReadUInt64()), 10000);
+    case SQL_BIT_TOKEN:
+      return ReadByte() ? "true" : "false";
+    case SQL_TINYINT_TOKEN:
+      return std::to_string(ReadByte());
+    case SQL_BIGINT_TOKEN:
       return std::to_string(static_cast<int64_t>(ReadUInt64()));
     case 0x10:
-    case 0x0E:
-    case 0x11:
+    case SQL_NCHAR_TOKEN:
+    case SQL_NVARCHAR_TOKEN:
       return ReadInlineUtf16Value();
     case 0x12:
       return ReadSqlDateTimeValueText();
+    // Legacy SSAS compact scalars (same wire shapes; opcode overlap with other
+    // MS-BINXML type tags in non-cell contexts).
     case 0x13: {
       Ensure(2);
       auto value = static_cast<int16_t>(data[offset] | (data[offset + 1] << 8));
       offset += 2;
       return std::to_string(value);
     }
-    case 0x14: {
-      Ensure(4);
-      auto value =
-          static_cast<int32_t>(static_cast<uint32_t>(data[offset]) |
-                               (static_cast<uint32_t>(data[offset + 1]) << 8) |
-                               (static_cast<uint32_t>(data[offset + 2]) << 16) |
-                               (static_cast<uint32_t>(data[offset + 3]) << 24));
-      offset += 4;
-      return std::to_string(value);
-    }
+    case 0x14:
+      return std::to_string(ReadInt32());
     case 0x15:
       return FormatDouble(ReadDouble());
+    case 0x16:
+      return "true";
+    case 0x17:
+      return "false";
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -1597,10 +1660,6 @@ private:
     }
     case 0x1B:
       return std::to_string(ReadUInt64());
-    case 0x16:
-      return "true";
-    case 0x17:
-      return "false";
     case EMPTY_TEXT_TOKEN:
       return std::string();
     default:
@@ -1640,9 +1699,32 @@ private:
       ParseStartElement();
       return;
     case 0x01:
-      // 0x01 can appear both as a compact start-element token and as a control
-      // marker in some strict SX metadata payloads. Disambiguate by probing the
-      // following varuint as a valid known name id.
+      // MS-BINXML uses 0x01 for SQL-SMALLINT. SSAS also uses 0x01 as a compact
+      // start/control marker; the following varuint can match a known name id.
+      // When we are in a pending cell under a data row, the next bytes are cell
+      // payload — treat as smallint first so low values (e.g. int16 1 = 0x01
+      // 0x00) cannot be mistaken for name id 1. Do not do this for arbitrary
+      // pending starts (schema/metadata or a pending row before it is flushed).
+      if (pending_start && !element_stack.empty() &&
+          element_stack.back() == "row") {
+        auto cell_name = pending_start ? pending_name : last_started_name;
+        FlushPendingStart();
+        auto text = ReadTextValue(SQL_SMALLINT_TOKEN);
+        if (DebugSsasMeasuresEnabled() && !cell_name.empty() &&
+            measure_trace_count < MEASURE_TRACE_LIMIT) {
+          std::fprintf(
+              stderr,
+              "[pbi_scanner] SSAS row cell=%s token=0x%02x "
+              "text_len=%llu text=\"%s\"\n",
+              cell_name.c_str(), static_cast<unsigned int>(SQL_SMALLINT_TOKEN),
+              static_cast<unsigned long long>(text.size()), text.c_str());
+          measure_trace_count++;
+        }
+        sink.Text(text);
+        return;
+      }
+      // Disambiguate compact start vs metadata by probing the following
+      // varuint.
       {
         uint32_t maybe_name_id = 0;
         idx_t next_offset = offset;
@@ -1664,16 +1746,26 @@ private:
     case 0xF7:
       FlushPendingStart();
       sink.EndElement();
+      if (!element_stack.empty()) {
+        element_stack.pop_back();
+      }
       return;
-    case 0x04:
-    case 0x08:
+    case SQL_INT_TOKEN:
+    case SQL_REAL_TOKEN:
+    case SQL_FLOAT_TOKEN:
+    case SQL_MONEY_TOKEN:
+    case SQL_BIT_TOKEN:
+    case SQL_TINYINT_TOKEN:
+    case SQL_BIGINT_TOKEN:
     case 0x10:
-    case 0x0E:
-    case 0x11:
+    case SQL_NCHAR_TOKEN:
+    case SQL_NVARCHAR_TOKEN:
     case 0x12:
     case 0x13:
     case 0x14:
     case 0x15:
+    case 0x16:
+    case 0x17:
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -1682,8 +1774,6 @@ private:
     case 0x19:
     case 0x1A:
     case 0x1B:
-    case 0x16:
-    case 0x17:
     case EMPTY_TEXT_TOKEN: {
       auto cell_name = pending_start ? pending_name : last_started_name;
       FlushPendingStart();
@@ -1718,6 +1808,7 @@ private:
   std::string pending_name;
   std::string last_started_name;
   case_insensitive_map_t<std::string> pending_attributes;
+  std::vector<std::string> element_stack;
 };
 
 class SsasFastRowParser {
@@ -1763,6 +1854,16 @@ private:
   class NeedMoreInputException {};
 
   enum class ElementKind : uint8_t { OTHER, SCHEMA, ROW };
+  static constexpr uint8_t SQL_SMALLINT_TOKEN = 0x01;
+  static constexpr uint8_t SQL_INT_TOKEN = 0x02;
+  static constexpr uint8_t SQL_REAL_TOKEN = 0x03;
+  static constexpr uint8_t SQL_FLOAT_TOKEN = 0x04;
+  static constexpr uint8_t SQL_MONEY_TOKEN = 0x05;
+  static constexpr uint8_t SQL_BIT_TOKEN = 0x06;
+  static constexpr uint8_t SQL_TINYINT_TOKEN = 0x07;
+  static constexpr uint8_t SQL_BIGINT_TOKEN = 0x08;
+  static constexpr uint8_t SQL_NCHAR_TOKEN = 0x0E;
+  static constexpr uint8_t SQL_NVARCHAR_TOKEN = 0x11;
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
   static constexpr idx_t CELL_TRACE_LIMIT = 80;
   static constexpr idx_t STREAMING_CHECKPOINT_THRESHOLD = 512;
@@ -1843,6 +1944,7 @@ private:
   }
 
   void ParseAvailable(bool final) {
+    final_parse_pass = final;
     if (!normalized_preamble && (PeekByte() == 0xDF || PeekByte() == 0xB0)) {
       auto state = streaming ? CaptureState() : ParserState();
       try {
@@ -1992,6 +2094,8 @@ private:
     return value;
   }
 
+  int32_t ReadInt32() { return static_cast<int32_t>(ReadUInt32()); }
+
   uint64_t ReadUInt64() {
     Ensure(8);
     uint64_t result = 0;
@@ -2005,6 +2109,13 @@ private:
   double ReadDouble() {
     auto raw = ReadUInt64();
     double value;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+  }
+
+  float ReadFloat() {
+    auto raw = ReadUInt32();
+    float value;
     std::memcpy(&value, &raw, sizeof(value));
     return value;
   }
@@ -2030,6 +2141,34 @@ private:
   std::string FormatDouble(double value) const {
     std::ostringstream stream;
     stream << std::setprecision(17) << value;
+    return stream.str();
+  }
+
+  std::string FormatScaledInteger(int64_t raw_value, int32_t scale) const {
+    bool negative = raw_value < 0;
+    uint64_t abs_value;
+    if (negative) {
+      abs_value = static_cast<uint64_t>(-(raw_value + 1)) + 1;
+    } else {
+      abs_value = static_cast<uint64_t>(raw_value);
+    }
+    auto integer_part = abs_value / static_cast<uint64_t>(scale);
+    auto fractional_part = abs_value % static_cast<uint64_t>(scale);
+    std::ostringstream stream;
+    if (negative) {
+      stream << "-";
+    }
+    stream << integer_part;
+    if (fractional_part != 0) {
+      std::string fraction = std::to_string(fractional_part);
+      while (fraction.size() < 4) {
+        fraction.insert(fraction.begin(), '0');
+      }
+      while (!fraction.empty() && fraction.back() == '0') {
+        fraction.pop_back();
+      }
+      stream << "." << fraction;
+    }
     return stream.str();
   }
 
@@ -2311,6 +2450,9 @@ private:
       return false;
     }
     if (payload_end == size) {
+      if (streaming && !final_parse_pass) {
+        throw NeedMoreInputException();
+      }
       return true;
     }
     return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
@@ -2318,22 +2460,40 @@ private:
 
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
-    case 0x04:
+    case SQL_SMALLINT_TOKEN:
+      return std::to_string(static_cast<int16_t>(ReadUInt16()));
+    case SQL_INT_TOKEN:
+      return std::to_string(ReadInt32());
+    case SQL_REAL_TOKEN:
+      return FormatDouble(ReadFloat());
+    case SQL_FLOAT_TOKEN:
       return FormatDouble(ReadDouble());
-    case 0x08:
+    case SQL_MONEY_TOKEN:
+      return FormatScaledInteger(static_cast<int64_t>(ReadUInt64()), 10000);
+    case SQL_BIT_TOKEN:
+      return ReadByte() ? "true" : "false";
+    case SQL_TINYINT_TOKEN:
+      return std::to_string(ReadByte());
+    case SQL_BIGINT_TOKEN:
       return std::to_string(static_cast<int64_t>(ReadUInt64()));
     case 0x10:
-    case 0x0E:
-    case 0x11:
+    case SQL_NCHAR_TOKEN:
+    case SQL_NVARCHAR_TOKEN:
       return ReadInlineUtf16Value();
     case 0x12:
       return ReadSqlDateTimeValueText();
+    // Legacy SSAS compact scalars (same wire shapes; opcode overlap with other
+    // MS-BINXML type tags in non-cell contexts).
     case 0x13:
       return std::to_string(static_cast<int16_t>(ReadUInt16()));
     case 0x14:
-      return std::to_string(static_cast<int32_t>(ReadUInt32()));
+      return std::to_string(ReadInt32());
     case 0x15:
       return FormatDouble(ReadDouble());
+    case 0x16:
+      return "true";
+    case 0x17:
+      return "false";
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -2351,10 +2511,6 @@ private:
       return std::to_string(ReadUInt32());
     case 0x1B:
       return std::to_string(ReadUInt64());
-    case 0x16:
-      return "true";
-    case 0x17:
-      return "false";
     case EMPTY_TEXT_TOKEN:
       return std::string();
     default:
@@ -2369,7 +2525,16 @@ private:
 
   Value ReadCellValue(uint8_t token, XmlaCoercionKind coercion_kind) {
     switch (token) {
-    case 0x04:
+    case SQL_REAL_TOKEN:
+    case SQL_FLOAT_TOKEN: {
+      auto value = token == SQL_REAL_TOKEN ? static_cast<double>(ReadFloat())
+                                           : ReadDouble();
+      if (coercion_kind == XmlaCoercionKind::DOUBLE ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::DOUBLE(value);
+      }
+      return ValueFromText(FormatDouble(value), coercion_kind);
+    }
     case 0x15: {
       auto value = ReadDouble();
       if (coercion_kind == XmlaCoercionKind::DOUBLE ||
@@ -2392,7 +2557,12 @@ private:
       }
       return ValueFromText(FormatDouble(numeric_value), coercion_kind);
     }
-    case 0x08: {
+    case SQL_MONEY_TOKEN: {
+      auto text =
+          FormatScaledInteger(static_cast<int64_t>(ReadUInt64()), 10000);
+      return ValueFromText(text, coercion_kind);
+    }
+    case SQL_BIGINT_TOKEN: {
       auto value = static_cast<int64_t>(ReadUInt64());
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
           coercion_kind == XmlaCoercionKind::INFER) {
@@ -2407,6 +2577,7 @@ private:
       auto text = ReadSqlDateTimeValueText();
       return ValueFromText(text, coercion_kind);
     }
+    case SQL_SMALLINT_TOKEN:
     case 0x13: {
       auto value = static_cast<int16_t>(ReadUInt16());
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
@@ -2418,8 +2589,9 @@ private:
       }
       return ValueFromText(std::to_string(value), coercion_kind);
     }
+    case SQL_INT_TOKEN:
     case 0x14: {
-      auto value = static_cast<int32_t>(ReadUInt32());
+      auto value = ReadInt32();
       if (coercion_kind == XmlaCoercionKind::BIGINT ||
           coercion_kind == XmlaCoercionKind::INFER) {
         return Value::BIGINT(value);
@@ -2429,7 +2601,7 @@ private:
       }
       return ValueFromText(std::to_string(value), coercion_kind);
     }
-    case 0x18: {
+    case SQL_TINYINT_TOKEN: {
       auto value = static_cast<uint64_t>(ReadByte());
       if (coercion_kind == XmlaCoercionKind::UBIGINT) {
         return Value::UBIGINT(value);
@@ -2443,6 +2615,31 @@ private:
       }
       return ValueFromText(std::to_string(value), coercion_kind);
     }
+    case SQL_BIT_TOKEN:
+      if (ReadByte()) {
+        if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+            coercion_kind == XmlaCoercionKind::INFER) {
+          return Value::BOOLEAN(true);
+        }
+        return ValueFromText("true", coercion_kind);
+      }
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(false);
+      }
+      return ValueFromText("false", coercion_kind);
+    case 0x16:
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(true);
+      }
+      return ValueFromText("true", coercion_kind);
+    case 0x17:
+      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
+          coercion_kind == XmlaCoercionKind::INFER) {
+        return Value::BOOLEAN(false);
+      }
+      return ValueFromText("false", coercion_kind);
     case 0x19: {
       auto value = static_cast<uint64_t>(ReadUInt16());
       if (coercion_kind == XmlaCoercionKind::UBIGINT) {
@@ -2482,21 +2679,9 @@ private:
       }
       return ValueFromText(std::to_string(value), coercion_kind);
     }
-    case 0x16:
-      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
-          coercion_kind == XmlaCoercionKind::INFER) {
-        return Value::BOOLEAN(true);
-      }
-      return ValueFromText("true", coercion_kind);
-    case 0x17:
-      if (coercion_kind == XmlaCoercionKind::BOOLEAN ||
-          coercion_kind == XmlaCoercionKind::INFER) {
-        return Value::BOOLEAN(false);
-      }
-      return ValueFromText("false", coercion_kind);
     case 0x10:
-    case 0x0E:
-    case 0x11:
+    case SQL_NCHAR_TOKEN:
+    case SQL_NVARCHAR_TOKEN:
       return ValueFromText(ReadInlineUtf16Value(), coercion_kind);
     case EMPTY_TEXT_TOKEN:
       return ValueFromText(std::string(), coercion_kind);
@@ -2575,6 +2760,10 @@ private:
       ParseStartElement();
       return;
     case 0x01: {
+      if (pending_start && ParentIsRow()) {
+        ParseText(SQL_SMALLINT_TOKEN);
+        return;
+      }
       uint32_t maybe_name_id = 0;
       idx_t next_offset = offset;
       auto has_name_id =
@@ -2603,15 +2792,22 @@ private:
     case 0xF7:
       EndElement();
       return;
-    case 0x04:
-    case 0x08:
+    case SQL_INT_TOKEN:
+    case SQL_REAL_TOKEN:
+    case SQL_FLOAT_TOKEN:
+    case SQL_MONEY_TOKEN:
+    case SQL_BIT_TOKEN:
+    case SQL_TINYINT_TOKEN:
+    case SQL_BIGINT_TOKEN:
     case 0x10:
-    case 0x0E:
-    case 0x11:
+    case SQL_NCHAR_TOKEN:
+    case SQL_NVARCHAR_TOKEN:
     case 0x12:
     case 0x13:
     case 0x14:
     case 0x15:
+    case 0x16:
+    case 0x17:
     case 0xAE:
     case 0xAF:
     case 0xB0:
@@ -2620,8 +2816,6 @@ private:
     case 0x19:
     case 0x1A:
     case 0x1B:
-    case 0x16:
-    case 0x17:
     case EMPTY_TEXT_TOKEN:
       ParseText(token);
       return;
@@ -2654,6 +2848,7 @@ private:
   bool normalized_preamble = false;
   bool debug_trace_enabled = false;
   bool streaming = false;
+  bool final_parse_pass = false;
   std::string owned_data;
 };
 
