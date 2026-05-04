@@ -70,18 +70,18 @@ SELECT __pbi_scanner_test_parse_streaming_sx_double(
 ----
 112.5
 
-# MS-BINXML ValueText (token 0x05) for a numeric string — SSAS / sx can emit this
-# instead of a binary double; must parse like other text cell values.
+# MS-BINXML SQL-MONEY (token 0x05) — SSAS / sx can emit scalar typed values
+# from the BINXML grammar, not only the compact tokens observed in early tests.
 query I
 SELECT __pbi_scanner_test_parse_binxml_double(
-    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803050105003100310032002e003500f7f7f7'
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f80305882a110000000000f7f7f7'
 );
 ----
 112.5
 
 query I
 SELECT __pbi_scanner_test_parse_streaming_sx_double(
-    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803050105003100310032002e003500f7f7f7',
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f80305882a110000000000f7f7f7',
     3
 );
 ----
@@ -89,7 +89,7 @@ SELECT __pbi_scanner_test_parse_streaming_sx_double(
 
 query T
 SELECT __pbi_scanner_test_parse_binxml_first_text(
-    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f803050105003100310032002e003500f7f7f7'
+    'dfff01b004f00472006f006f007400ef000001f801f00372006f007700ef000002f802f0045200610074006500ef000003f80305882a110000000000f7f7f7'
 );
 ----
 112.5
