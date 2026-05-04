@@ -1222,6 +1222,9 @@ public:
   }
 
 private:
+  // MS-BINXML ValueText (matches BinXmlParser VALUE_TEXT_TOKEN semantics).
+  static constexpr uint8_t BINXML_VALUE_TEXT_TOKEN = 0x05;
+  static constexpr uint8_t BINXML_STRING_VALUE_TYPE = 0x01;
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
   static constexpr idx_t MEASURE_TRACE_LIMIT = 200;
 
@@ -1480,6 +1483,20 @@ private:
     return ReadUtf16String(length, false);
   }
 
+  std::string ReadBinXmlInlineUnicodeValueText() {
+    auto string_type = ReadByte();
+    if (string_type != BINXML_STRING_VALUE_TYPE) {
+      throw IOException(
+          "SSAS binary XML unsupported ValueText type 0x%02x at offset %llu",
+          string_type, static_cast<unsigned long long>(offset - 1));
+    }
+    Ensure(2);
+    auto code_units = static_cast<uint16_t>(data[offset]) |
+                      static_cast<uint16_t>(data[offset + 1] << 8);
+    offset += 2;
+    return ReadUtf16String(code_units, false);
+  }
+
   bool IsLikelyRecordToken(uint8_t token) const {
     switch (token) {
     case 0x00:
@@ -1535,11 +1552,15 @@ private:
     if (payload_end == size) {
       return true;
     }
-    return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
+    auto next_byte = static_cast<uint8_t>(data[payload_end]);
+    return IsLikelyRecordToken(next_byte) ||
+           next_byte == BINXML_VALUE_TEXT_TOKEN;
   }
 
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
+    case BINXML_VALUE_TEXT_TOKEN:
+      return ReadBinXmlInlineUnicodeValueText();
     case 0x04:
       return FormatDouble(ReadDouble());
     case 0x08:
@@ -1684,6 +1705,7 @@ private:
     case 0x1B:
     case 0x16:
     case 0x17:
+    case BINXML_VALUE_TEXT_TOKEN:
     case EMPTY_TEXT_TOKEN: {
       auto cell_name = pending_start ? pending_name : last_started_name;
       FlushPendingStart();
@@ -1763,6 +1785,8 @@ private:
   class NeedMoreInputException {};
 
   enum class ElementKind : uint8_t { OTHER, SCHEMA, ROW };
+  static constexpr uint8_t BINXML_VALUE_TEXT_TOKEN = 0x05;
+  static constexpr uint8_t BINXML_STRING_VALUE_TYPE = 0x01;
   static constexpr uint8_t EMPTY_TEXT_TOKEN = 0x86;
   static constexpr idx_t CELL_TRACE_LIMIT = 80;
   static constexpr idx_t STREAMING_CHECKPOINT_THRESHOLD = 512;
@@ -2258,6 +2282,21 @@ private:
     return ReadUtf16String(length, false);
   }
 
+  std::string ReadBinXmlInlineUnicodeValueText() {
+    auto string_type = ReadByte();
+    if (string_type != BINXML_STRING_VALUE_TYPE) {
+      throw IOException(
+          "SSAS fast row parser unsupported ValueText type 0x%02x at offset "
+          "%llu",
+          string_type, static_cast<unsigned long long>(offset - 1));
+    }
+    Ensure(2);
+    auto code_units = static_cast<uint16_t>(data[offset]) |
+                      static_cast<uint16_t>(data[offset + 1] << 8);
+    offset += 2;
+    return ReadUtf16String(code_units, false);
+  }
+
   bool IsLikelyRecordToken(uint8_t token) const {
     switch (token) {
     case 0x00:
@@ -2313,11 +2352,15 @@ private:
     if (payload_end == size) {
       return true;
     }
-    return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
+    auto next_byte = static_cast<uint8_t>(data[payload_end]);
+    return IsLikelyRecordToken(next_byte) ||
+           next_byte == BINXML_VALUE_TEXT_TOKEN;
   }
 
   std::string ReadTextValue(uint8_t token) {
     switch (token) {
+    case BINXML_VALUE_TEXT_TOKEN:
+      return ReadBinXmlInlineUnicodeValueText();
     case 0x04:
       return FormatDouble(ReadDouble());
     case 0x08:
@@ -2369,6 +2412,9 @@ private:
 
   Value ReadCellValue(uint8_t token, XmlaCoercionKind coercion_kind) {
     switch (token) {
+    case BINXML_VALUE_TEXT_TOKEN:
+      return ValueFromText(ReadBinXmlInlineUnicodeValueText(),
+                           coercion_kind);
     case 0x04:
     case 0x15: {
       auto value = ReadDouble();
@@ -2622,6 +2668,7 @@ private:
     case 0x1B:
     case 0x16:
     case 0x17:
+    case BINXML_VALUE_TEXT_TOKEN:
     case EMPTY_TEXT_TOKEN:
       ParseText(token);
       return;
