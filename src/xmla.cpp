@@ -1516,7 +1516,9 @@ private:
     if (!pending_start) {
       return;
     }
+    std::string pushed_local = pending_name;
     sink.StartElement(std::move(pending_name), std::move(pending_attributes));
+    element_stack.push_back(std::move(pushed_local));
     pending_attributes.clear();
     pending_name.clear();
     pending_start = false;
@@ -1699,10 +1701,12 @@ private:
     case 0x01:
       // MS-BINXML uses 0x01 for SQL-SMALLINT. SSAS also uses 0x01 as a compact
       // start/control marker; the following varuint can match a known name id.
-      // When we are in a pending cell, the next bytes are always cell payload —
-      // treat as smallint first so low values (e.g. int16 1 = 0x01 0x00) cannot
-      // be mistaken for name id 1.
-      if (pending_start) {
+      // When we are in a pending cell under a data row, the next bytes are cell
+      // payload — treat as smallint first so low values (e.g. int16 1 = 0x01 0x00)
+      // cannot be mistaken for name id 1. Do not do this for arbitrary pending
+      // starts (schema/metadata or a pending row before it is flushed).
+      if (pending_start && !element_stack.empty() &&
+          element_stack.back() == "row") {
         auto cell_name = pending_start ? pending_name : last_started_name;
         FlushPendingStart();
         auto text = ReadTextValue(SQL_SMALLINT_TOKEN);
@@ -1742,6 +1746,9 @@ private:
     case 0xF7:
       FlushPendingStart();
       sink.EndElement();
+      if (!element_stack.empty()) {
+        element_stack.pop_back();
+      }
       return;
     case SQL_INT_TOKEN:
     case SQL_REAL_TOKEN:
@@ -1801,6 +1808,7 @@ private:
   std::string pending_name;
   std::string last_started_name;
   case_insensitive_map_t<std::string> pending_attributes;
+  std::vector<std::string> element_stack;
 };
 
 class SsasFastRowParser {
@@ -2751,7 +2759,7 @@ private:
       ParseStartElement();
       return;
     case 0x01: {
-      if (pending_start) {
+      if (pending_start && ParentIsRow()) {
         ParseText(SQL_SMALLINT_TOKEN);
         return;
       }
