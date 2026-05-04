@@ -24,8 +24,8 @@ make tidy-check
 
 ## Extension Version Bumps
 
-- Extension metadata uses numeric semver in `extension_config.cmake` (`EXTENSION_VERSION 0.0.3`).
-- GitHub tags/releases use a `v` prefix, for example `v0.0.3`.
+- Extension metadata uses numeric semver in `extension_config.cmake` (`EXTENSION_VERSION 0.0.4`).
+- GitHub tags/releases use a `v` prefix, for example `v0.0.4`.
 - Keep the community descriptor `extension.version` aligned with `extension_config.cmake`.
 - The community descriptor `repo.ref` must point at the validated release commit SHA from this repo.
 
