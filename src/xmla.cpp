@@ -12,8 +12,8 @@
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -1702,9 +1702,9 @@ private:
       // MS-BINXML uses 0x01 for SQL-SMALLINT. SSAS also uses 0x01 as a compact
       // start/control marker; the following varuint can match a known name id.
       // When we are in a pending cell under a data row, the next bytes are cell
-      // payload — treat as smallint first so low values (e.g. int16 1 = 0x01 0x00)
-      // cannot be mistaken for name id 1. Do not do this for arbitrary pending
-      // starts (schema/metadata or a pending row before it is flushed).
+      // payload — treat as smallint first so low values (e.g. int16 1 = 0x01
+      // 0x00) cannot be mistaken for name id 1. Do not do this for arbitrary
+      // pending starts (schema/metadata or a pending row before it is flushed).
       if (pending_start && !element_stack.empty() &&
           element_stack.back() == "row") {
         auto cell_name = pending_start ? pending_name : last_started_name;
@@ -1712,19 +1712,19 @@ private:
         auto text = ReadTextValue(SQL_SMALLINT_TOKEN);
         if (DebugSsasMeasuresEnabled() && !cell_name.empty() &&
             measure_trace_count < MEASURE_TRACE_LIMIT) {
-          std::fprintf(stderr,
-                       "[pbi_scanner] SSAS row cell=%s token=0x%02x "
-                       "text_len=%llu text=\"%s\"\n",
-                       cell_name.c_str(),
-                       static_cast<unsigned int>(SQL_SMALLINT_TOKEN),
-                       static_cast<unsigned long long>(text.size()),
-                       text.c_str());
+          std::fprintf(
+              stderr,
+              "[pbi_scanner] SSAS row cell=%s token=0x%02x "
+              "text_len=%llu text=\"%s\"\n",
+              cell_name.c_str(), static_cast<unsigned int>(SQL_SMALLINT_TOKEN),
+              static_cast<unsigned long long>(text.size()), text.c_str());
           measure_trace_count++;
         }
         sink.Text(text);
         return;
       }
-      // Disambiguate compact start vs metadata by probing the following varuint.
+      // Disambiguate compact start vs metadata by probing the following
+      // varuint.
       {
         uint32_t maybe_name_id = 0;
         idx_t next_offset = offset;
@@ -2558,7 +2558,8 @@ private:
       return ValueFromText(FormatDouble(numeric_value), coercion_kind);
     }
     case SQL_MONEY_TOKEN: {
-      auto text = FormatScaledInteger(static_cast<int64_t>(ReadUInt64()), 10000);
+      auto text =
+          FormatScaledInteger(static_cast<int64_t>(ReadUInt64()), 10000);
       return ValueFromText(text, coercion_kind);
     }
     case SQL_BIGINT_TOKEN: {
