@@ -286,7 +286,19 @@ If you use Cursor worktrees (`/worktree` or `--worktree`), this repo includes
 
 - Copy `.env` from the root worktree when present (only if the new worktree
   does not already have one)
-- Run `git submodule update --init --recursive`
+- Run `git submodule sync --recursive` and `git submodule update --init --recursive`
+- Fail fast if `extension-ci-tools` did not populate (so submodule problems are not silent)
+
+Bootstrapping submodules does **not** run `make`; build artifacts such as
+`./build/release/test/unittest` appear only after you build in that worktree
+(for example `make` / `make test`).
+
+If setup did not run (or you need to repair a worktree manually), from the
+worktree root you can run:
+
+```bash
+bash .cursor/setup-worktree-unix.sh
+```
 
 ## Platform Notes
 
