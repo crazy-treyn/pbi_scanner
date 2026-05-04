@@ -1694,7 +1694,11 @@ private:
           return;
         }
       }
-      if (pending_start || !last_started_name.empty()) {
+      // 0x01 is ambiguous: SSAS uses it as a compact start/control marker and
+      // MS-BINXML uses it for SQL-SMALLINT. Only consume it as a scalar when it
+      // immediately follows a pending cell start; otherwise keep the historical
+      // control-marker behavior.
+      if (pending_start) {
         auto cell_name = pending_start ? pending_name : last_started_name;
         FlushPendingStart();
         auto text = ReadTextValue(SQL_SMALLINT_TOKEN);
@@ -2417,6 +2421,9 @@ private:
       return false;
     }
     if (payload_end == size) {
+      if (streaming) {
+        throw NeedMoreInputException();
+      }
       return true;
     }
     return IsLikelyRecordToken(static_cast<uint8_t>(data[payload_end]));
@@ -2705,7 +2712,11 @@ private:
         ParseStartElement();
         return;
       }
-      if (pending_start || ActiveColumnIndex() != DConstants::INVALID_INDEX) {
+      // 0x01 is ambiguous: SSAS uses it as a compact start/control marker and
+      // MS-BINXML uses it for SQL-SMALLINT. Only consume it as a scalar when it
+      // immediately follows a pending cell start; otherwise keep the historical
+      // control-marker behavior.
+      if (pending_start) {
         ParseText(SQL_SMALLINT_TOKEN);
         return;
       }
