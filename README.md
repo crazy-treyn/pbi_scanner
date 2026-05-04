@@ -279,6 +279,15 @@ uv run bench_native_http.py --smoke
 uv run --group bench query_semantic_model_minimal.py
 ```
 
+### Cursor Worktree Setup
+
+If you use Cursor worktrees (`/worktree` or `--worktree`), this repo includes
+`.cursor/worktrees.json` to bootstrap each new worktree automatically:
+
+- Copy `.env` from the root worktree when present (only if the new worktree
+  does not already have one)
+- Run `git submodule update --init --recursive`
+
 ## Platform Notes
 
 ### macOS
@@ -309,21 +318,26 @@ sudo dnf install -y git gcc-c++ make cmake pkg-config openssl-devel
 
 Recommended: WSL2 + Linux steps.
 
-For native Windows builds, use the repo wrapper so Visual Studio and CMake
-paths are resolved automatically:
+For native Windows builds, bootstrap once, then use the repo wrapper:
 
 ```powershell
+.\scripts\dev-win.ps1 bootstrap
 .\scripts\dev-win.ps1 build
 .\scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test
 ```
 
 Command wrapper behavior:
 
+- `bootstrap` installs missing prerequisites with `winget` (VS Build Tools +
+  C++ workload, Git, CMake), then clones/bootstraps vcpkg into `local/vcpkg`
+  (or `%VCPKG_ROOT%` when set).
 - Uses `VsDevCmd.bat` from VS 2022 Build Tools first, then VS 2019 Build Tools.
 - Uses `cmake.exe` on `PATH`, else Visual Studio CMake fallback paths.
-- Configures with repo-safe defaults:
+- Configures with repo-safe defaults and vcpkg toolchain integration:
   - `-DCMAKE_IGNORE_PATH=C:/msys64`
-  - OpenSSL/Zlib defaults: if `OPENSSL_ROOT_DIR`, `ZLIB_INCLUDE_DIR`, and `ZLIB_LIBRARY` are unset, the script tries `CONDA_PREFIX\Library` (when `opensslv.h` is present), then common installs under `%USERPROFILE%` (`miniconda3`, `miniconda`, `anaconda3`, `mambaforge`, `miniforge3`). Override any of these with the matching environment variable.
+  - `-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake`
+  - `-DVCPKG_TARGET_TRIPLET=x64-windows-static-release` by default (override
+    with `%VCPKG_TARGET_TRIPLET%`)
 - Builds with serialized MSBuild (`-- /m:1`) to reduce Windows file-lock failures.
 
 Optional launcher:
@@ -349,9 +363,9 @@ $env:PBI_BENCH_USE_BUNDLED_CLI='1'
 uv run --group bench python -u query_semantic_model_minimal.py
 ```
 
-If `duckdb.exe` fails to start because runtime DLLs are missing, make sure the
-OpenSSL `bin` directory is on `PATH`, or build with `OPENSSL_ROOT_DIR` pointing
-at an OpenSSL install that includes runtime DLLs.
+If `.\scripts\dev-win.ps1 configure` reports a missing vcpkg toolchain file,
+run `.\scripts\dev-win.ps1 bootstrap` or set `%VCPKG_ROOT%` to an existing
+vcpkg checkout.
 
 ## Troubleshooting
 
@@ -359,7 +373,7 @@ at an OpenSSL install that includes runtime DLLs.
 
 - macOS: `OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"`
 - Linux: install `libssl-dev` or `openssl-devel`
-- Windows: install OpenSSL and set `OPENSSL_ROOT_DIR`
+- Windows: run `.\scripts\dev-win.ps1 bootstrap` to install/bootstrap vcpkg
 
 ### Submodule Errors
 
