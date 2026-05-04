@@ -174,6 +174,82 @@ function Convert-ToCMakePath {
 	return $Value -replace "\\", "/"
 }
 
+function Get-CMakeCacheValue {
+	param(
+		[string]$CachePath,
+		[string]$Name
+	)
+
+	if (-not (Test-Path -LiteralPath $CachePath)) {
+		return $null
+	}
+
+	$escaped_name = [regex]::Escape($Name)
+	$line = Select-String -LiteralPath $CachePath -Pattern "^$escaped_name(?::[^=]*)?=(.*)$" | Select-Object -First 1
+	if (-not $line) {
+		return $null
+	}
+	return $line.Matches[0].Groups[1].Value
+}
+
+function Reset-CMakeConfigureState {
+	param(
+		[string]$BuildDir,
+		[string]$Reason
+	)
+
+	Write-Host "Resetting CMake configure state: $Reason"
+	$cache_path = Join-Path $BuildDir "CMakeCache.txt"
+	$files_path = Join-Path $BuildDir "CMakeFiles"
+	if (Test-Path -LiteralPath $cache_path) {
+		Remove-Item -LiteralPath $cache_path -Force
+	}
+	if (Test-Path -LiteralPath $files_path) {
+		Remove-Item -LiteralPath $files_path -Recurse -Force
+	}
+}
+
+function Ensure-CompatibleCMakeCache {
+	param(
+		[string]$BuildDir,
+		[string]$ExpectedSourceDir,
+		[string]$ExpectedToolchainFile,
+		[string]$ExpectedTargetTriplet,
+		[string]$ExpectedHostTriplet
+	)
+
+	$cache_path = Join-Path $BuildDir "CMakeCache.txt"
+	if (-not (Test-Path -LiteralPath $cache_path)) {
+		return
+	}
+
+	$expected_source = Convert-ToCMakePath $ExpectedSourceDir
+	$actual_source = Get-CMakeCacheValue -CachePath $cache_path -Name "CMAKE_HOME_DIRECTORY"
+	if ($actual_source -and ((Convert-ToCMakePath $actual_source) -ne $expected_source)) {
+		Reset-CMakeConfigureState -BuildDir $BuildDir -Reason "existing cache was generated from '$actual_source', expected '$expected_source'"
+		return
+	}
+
+	$expected_toolchain = Convert-ToCMakePath $ExpectedToolchainFile
+	$actual_toolchain = Get-CMakeCacheValue -CachePath $cache_path -Name "CMAKE_TOOLCHAIN_FILE"
+	if ((-not $actual_toolchain) -or ((Convert-ToCMakePath $actual_toolchain) -ne $expected_toolchain)) {
+		Reset-CMakeConfigureState -BuildDir $BuildDir -Reason "existing cache was not configured with vcpkg toolchain '$expected_toolchain'"
+		return
+	}
+
+	$actual_target_triplet = Get-CMakeCacheValue -CachePath $cache_path -Name "VCPKG_TARGET_TRIPLET"
+	if ($actual_target_triplet -ne $ExpectedTargetTriplet) {
+		Reset-CMakeConfigureState -BuildDir $BuildDir -Reason "existing cache used VCPKG_TARGET_TRIPLET='$actual_target_triplet', expected '$ExpectedTargetTriplet'"
+		return
+	}
+
+	$actual_host_triplet = Get-CMakeCacheValue -CachePath $cache_path -Name "VCPKG_HOST_TRIPLET"
+	if ($actual_host_triplet -ne $ExpectedHostTriplet) {
+		Reset-CMakeConfigureState -BuildDir $BuildDir -Reason "existing cache used VCPKG_HOST_TRIPLET='$actual_host_triplet', expected '$ExpectedHostTriplet'"
+		return
+	}
+}
+
 function Invoke-InVsDevShell {
 	param(
 		[string]$VsDevCmdPath,
@@ -286,6 +362,12 @@ switch ($Command) {
 		if (-not (Test-Path -LiteralPath $vcpkg_toolchain)) {
 			throw "Could not find vcpkg toolchain file at '$vcpkg_toolchain'. Run '.\scripts\dev-win.ps1 bootstrap' first or set VCPKG_ROOT."
 		}
+		Ensure-CompatibleCMakeCache `
+			-BuildDir $build_dir `
+			-ExpectedSourceDir (Join-Path $repo_root "duckdb") `
+			-ExpectedToolchainFile $vcpkg_toolchain `
+			-ExpectedTargetTriplet $vcpkg_triplet `
+			-ExpectedHostTriplet $vcpkg_triplet
 
 		$configure_parts = @(
 			(Quote-ForCmd $cmake_path),
@@ -295,9 +377,12 @@ switch ($Command) {
 			"-DCMAKE_BUILD_TYPE=Release",
 			"-DCMAKE_IGNORE_PATH=C:/msys64",
 			"-DCMAKE_TOOLCHAIN_FILE=$vcpkg_toolchain_cmake",
+			"-DVCPKG_BUILD=1",
+			"-DVCPKG_MANIFEST_MODE=ON",
 			"-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet",
 			"-DVCPKG_HOST_TRIPLET=$vcpkg_triplet",
 			"-DVCPKG_MANIFEST_DIR=$repo_root_cmake",
+			"-DOPENSSL_USE_STATIC_LIBS=TRUE",
 			"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$build_dir_cmake",
 			"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$build_dir_cmake",
 			"-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$build_dir_cmake",
