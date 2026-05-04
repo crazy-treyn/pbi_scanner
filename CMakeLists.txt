@@ -2,13 +2,17 @@ cmake_minimum_required(VERSION 3.5)
 
 set(TARGET_NAME pbi_scanner)
 
-find_package(OpenSSL REQUIRED)
-find_package(ZLIB)
-
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
+
+if(WIN32)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB)
+
 include_directories(src/include)
 include_directories(duckdb/third_party/httplib)
 include_directories(duckdb/third_party/yyjson/include)

@@ -28,7 +28,16 @@
 - Clang-tidy: `make tidy-check`.
 - Format/tidy targets bootstrap tools with `uv` from `pyproject.toml`; run commands from repo root.
 - macOS OpenSSL fallback when CMake cannot find it: `OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" make release`.
-- Windows fallback when `make` is unavailable: `scripts\dev-win.ps1 configure`, then `scripts\dev-win.ps1 build`, then `scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test`.
+
+## Native Windows Build Path
+
+- On native Windows, use the repo wrapper from PowerShell. Do not invoke bare `cmake` directly for normal builds; the wrapper supplies DuckDB extension config, vcpkg manifest mode, static OpenSSL, and cache compatibility checks.
+- First-time setup or missing toolchain: `powershell -ExecutionPolicy Bypass -File scripts\dev-win.ps1 bootstrap`.
+- Standard reproducible build: `powershell -ExecutionPolicy Bypass -File scripts\dev-win.ps1 build`.
+- Focused offline test: `powershell -ExecutionPolicy Bypass -File scripts\dev-win.ps1 test -R test/sql/pbi_scanner.test`.
+- Wrapper defaults: `VCPKG_ROOT=local\vcpkg`, `VCPKG_TARGET_TRIPLET=x64-windows-static-release`, `VCPKG_BUILD=1`, `VCPKG_MANIFEST_MODE=ON`, and static OpenSSL. Override only with intent via environment variables.
+- If a Windows executable exits immediately with `-1073741515`, suspect a runtime DLL dependency issue. Re-run the wrapper build so it can clear incompatible stale CMake cache state, then verify startup with `build\release\duckdb.exe -unsigned -c "SELECT 1;"`.
+- To confirm OpenSSL is static on Windows, inspect dependencies from a VS developer shell: `dumpbin /dependents build\release\duckdb.exe` and `dumpbin /dependents build\release\unittest.exe`. Expected dependencies are normal Windows DLLs only; no `libssl*.dll` or `libcrypto*.dll`.
 
 ## Tests And Live Helpers
 
