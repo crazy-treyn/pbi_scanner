@@ -108,6 +108,23 @@ function Resolve-UnittestPath {
 	throw "Could not find unittest.exe under build/release. Run .\scripts\dev-win.ps1 build first."
 }
 
+function Resolve-UnitTestsPath {
+	param([string]$BuildDir)
+
+	$candidates = @(
+		(Join-Path $BuildDir "pbi_scanner_unit_tests.exe"),
+		(Join-Path $BuildDir "Release\pbi_scanner_unit_tests.exe")
+	)
+
+	foreach ($candidate in $candidates) {
+		if (Test-Path -LiteralPath $candidate) {
+			return $candidate
+		}
+	}
+
+	throw "Could not find pbi_scanner_unit_tests.exe under build/release. Run .\scripts\dev-win.ps1 build first."
+}
+
 function Resolve-UnittestArgs {
 	param([string[]]$InputArgs)
 
@@ -427,6 +444,7 @@ switch ($Command) {
 	"test" {
 		$vsdevcmd_path = Resolve-VsDevCmd
 		$unittest_path = Resolve-UnittestPath -BuildDir $build_dir
+		$unit_tests_path = Resolve-UnitTestsPath -BuildDir $build_dir
 		$unittest_args = Resolve-UnittestArgs -InputArgs $ExtraArgs
 		$test_parts = @(
 			(Quote-ForCmd $unittest_path)
@@ -437,6 +455,9 @@ switch ($Command) {
 			}
 		}
 		Invoke-InVsDevShell -VsDevCmdPath $vsdevcmd_path -CommandParts $test_parts
+		Invoke-InVsDevShell -VsDevCmdPath $vsdevcmd_path -CommandParts @(
+			(Quote-ForCmd $unit_tests_path)
+		)
 	}
 	default {
 		throw "Unknown command: $Command"

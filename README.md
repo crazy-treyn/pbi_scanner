@@ -251,10 +251,13 @@ make reldebug
 make relassert
 ```
 
-Single test file:
+Focused offline tests (sqllogictest + Catch unit tests):
 
 ```bash
+make test-pbi-offline
+# or individually:
 ./build/release/test/unittest "test/sql/pbi_scanner.test"
+./build/release/pbi_scanner_unit_tests
 ```
 
 ### Quality Checks
