@@ -132,23 +132,22 @@ When both are provided, per-call named `auth_mode := ...` overrides the session
 
 ### DAX column names
 
-By default, `dax_query` and the `pbi_*` metadata table functions normalize XMLA
-column names for DuckDB: DAX square brackets are removed and table qualifiers
-are dropped (`Fact[Amount]` becomes `Amount`, `[Total Sales]` becomes
-`Total Sales`). When the same column name appears more than once, qualified
-names are disambiguated with a table prefix (`TableA[Amount]` and
-`TableB[Amount]` become `TableA_Amount` and `TableB_Amount`); any remaining
-collisions get numeric suffixes (`Amount_2`, `TableA_Amount_2`, etc.).
+By default, `dax_query` and the `pbi_*` metadata table functions return XMLA
+column names unchanged (including DAX table qualifiers and square brackets).
 
-**Breaking change:** normalization is on by default. Existing queries that
-reference bracketed DAX column names must opt out (below) or update column
-references. DuckDB quotes identifiers with spaces when you reference them in
-SQL.
+Opt in to normalization when you want DuckDB-friendly names: DAX square
+brackets are removed and table qualifiers are dropped (`Fact[Amount]` becomes
+`Amount`, `[Total Sales]` becomes `Total Sales`). When the same column name
+appears more than once, qualified names are disambiguated with a table prefix
+(`TableA[Amount]` and `TableB[Amount]` become `TableA_Amount` and
+`TableB_Amount`); any remaining collisions get numeric suffixes (`Amount_2`,
+`TableA_Amount_2`, etc.). DuckDB quotes identifiers with spaces when you
+reference them in SQL.
 
-Control normalization with a session default:
+Enable normalization for the session:
 
 ```sql
-SET pbi_scanner_normalize_dax_column_names = false;
+SET pbi_scanner_normalize_dax_column_names = true;
 ```
 
 Per-call named parameter overrides the session default for that query:
@@ -158,7 +157,7 @@ SELECT *
 FROM dax_query(
     'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
     'EVALUATE ''Fact Allocation''',
-    normalize_column_names := false
+    normalize_column_names := true
 );
 ```
 

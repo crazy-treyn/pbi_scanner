@@ -6,11 +6,11 @@ Uses the same PBI_BENCH_* env vars as query_semantic_model_minimal.py. Binds wit
 LIMIT 0 so only column names are fetched (no row materialization).
 
 Checks:
-  1. Default / normalize_column_names := true — no DAX square brackets in names
-  2. normalize_column_names := false — bracketed XMLA names or a diff vs (1)
-  3. SET pbi_scanner_normalize_dax_column_names = false — same as (2)
-  4. Session false + normalize_column_names := true — matches (1) (override)
-  5. pbi_columns LIMIT 0 — metadata helper shares bind path; names normalized
+  1. Default / session reset — raw XMLA names (bracketed when the model uses them)
+  2. normalize_column_names := true — no DAX square brackets in names
+  3. SET pbi_scanner_normalize_dax_column_names = true — same as (2)
+  4. Session true + normalize_column_names := false — matches (1) (override)
+  5. pbi_columns LIMIT 0 — metadata helper shares bind path; default stays raw
 
 Run:
   uv run --group bench verify_dax_column_names.py
@@ -89,8 +89,16 @@ def _fetch_pbi_columns_names(
     connection_string: str,
     secret_name: str | None,
     access_token: str | None,
+    *,
+    session_normalize: bool | None = None,
 ) -> list[str]:
-    con.sql("RESET pbi_scanner_normalize_dax_column_names")
+    if session_normalize is None:
+        con.sql("RESET pbi_scanner_normalize_dax_column_names")
+    else:
+        con.sql(
+            "SET pbi_scanner_normalize_dax_column_names = "
+            f"{'true' if session_normalize else 'false'}"
+        )
     if access_token is not None:
         source = (
             f"pbi_columns('{_sql_escape(connection_string)}', "
@@ -118,13 +126,13 @@ def verify_dax_column_normalization(
     access_token: str | None = None,
 ) -> None:
     cases = [
-        ColumnNameCase("session default (normalize on)"),
-        ColumnNameCase("normalize_column_names := false", param_normalize=False),
-        ColumnNameCase("session SET false", session_normalize=False),
+        ColumnNameCase("session default (normalize off)"),
+        ColumnNameCase("normalize_column_names := true", param_normalize=True),
+        ColumnNameCase("session SET true", session_normalize=True),
         ColumnNameCase(
-            "session false + param true override",
-            session_normalize=False,
-            param_normalize=True,
+            "session true + param false override",
+            session_normalize=True,
+            param_normalize=False,
         ),
     ]
 
@@ -146,33 +154,33 @@ def verify_dax_column_normalization(
         suffix = "..." if len(columns) > 6 else ""
         print(f"[verify] {case.label}: {len(columns)} columns — {preview}{suffix}")
 
-    normalized = results["session default (normalize on)"]
-    raw_param = results["normalize_column_names := false"]
-    raw_session = results["session SET false"]
-    override = results["session false + param true override"]
+    raw_default = results["session default (normalize off)"]
+    normalized_param = results["normalize_column_names := true"]
+    normalized_session = results["session SET true"]
+    raw_override = results["session true + param false override"]
 
-    if _has_bracketed_dax_name(normalized):
+    if _has_bracketed_dax_name(normalized_param):
         raise AssertionError(
             "expected normalized columns without '['; got: "
-            + ", ".join(normalized[:12])
+            + ", ".join(normalized_param[:12])
         )
 
-    if not _has_bracketed_dax_name(raw_param) and raw_param == normalized:
+    if not _has_bracketed_dax_name(raw_default) and raw_default == normalized_param:
         raise AssertionError(
-            "raw param mode matched normalized names; model may not expose "
+            "raw default matched normalized names; model may not expose "
             "bracketed XMLA names for this DAX query"
         )
 
-    if raw_session != raw_param:
+    if normalized_session != normalized_param:
         raise AssertionError(
-            "session SET false should match normalize_column_names := false; "
-            f"session={raw_session[:5]} param={raw_param[:5]}"
+            "session SET true should match normalize_column_names := true; "
+            f"session={normalized_session[:5]} param={normalized_param[:5]}"
         )
 
-    if override != normalized:
+    if raw_override != raw_default:
         raise AssertionError(
-            "named param true should override session false; "
-            f"override={override[:5]} normalized={normalized[:5]}"
+            "named param false should override session true; "
+            f"override={raw_override[:5]} raw={raw_default[:5]}"
         )
 
     started = perf_counter()
@@ -184,11 +192,28 @@ def verify_dax_column_normalization(
         f"[verify] pbi_columns default: {len(metadata_columns)} columns — "
         f"{', '.join(metadata_columns[:6])}"
     )
-    if _has_bracketed_dax_name(metadata_columns):
-        raise AssertionError(
-            "pbi_columns should normalize names by default; got: "
-            + ", ".join(metadata_columns[:12])
-        )
+
+    started = perf_counter()
+    metadata_normalized = _fetch_pbi_columns_names(
+        con,
+        connection_string,
+        secret_name,
+        access_token,
+        session_normalize=True,
+    )
+    log_timing("column names [pbi_columns session true]", started)
+    print(
+        f"[verify] pbi_columns session true: {len(metadata_normalized)} columns — "
+        f"{', '.join(metadata_normalized[:6])}"
+    )
+    if metadata_normalized != metadata_columns and _has_bracketed_dax_name(
+        metadata_columns
+    ):
+        if _has_bracketed_dax_name(metadata_normalized):
+            raise AssertionError(
+                "pbi_columns with session true should normalize bracketed names; got: "
+                + ", ".join(metadata_normalized[:12])
+            )
 
     print("[verify] PASS — column name normalization behaves as expected")
 

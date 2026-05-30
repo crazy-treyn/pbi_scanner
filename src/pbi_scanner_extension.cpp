@@ -40,8 +40,9 @@ static void LoadInternal(ExtensionLoader &loader) {
   config.AddExtensionOption(
       "pbi_scanner_normalize_dax_column_names",
       "When true, strip DAX square brackets and table qualifiers from "
-      "dax_query and pbi_* metadata table function column names",
-      LogicalType::BOOLEAN, Value::BOOLEAN(true));
+      "dax_query and pbi_* metadata table function column names (default "
+      "off; opt in via SET or normalize_column_names)",
+      LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());

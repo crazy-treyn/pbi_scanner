@@ -68,7 +68,7 @@ bool ResolveNormalizeDaxColumnNames(
   if (!context.TryGetCurrentSetting("pbi_scanner_normalize_dax_column_names",
                                     setting) ||
       setting.IsNull()) {
-    return true;
+    return false;
   }
   return setting.GetValue<bool>();
 }

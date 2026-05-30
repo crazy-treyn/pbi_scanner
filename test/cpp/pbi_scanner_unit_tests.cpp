@@ -297,11 +297,16 @@ TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {
   auto &context = *con.context;
 
   named_parameter_map_t empty;
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
+
+  auto set_on_result =
+      con.Query("SET pbi_scanner_normalize_dax_column_names = true");
+  REQUIRE(!set_on_result->HasError());
   REQUIRE(ResolveNormalizeDaxColumnNames(context, empty));
 
-  auto set_result =
+  auto set_off_result =
       con.Query("SET pbi_scanner_normalize_dax_column_names = false");
-  REQUIRE(!set_result->HasError());
+  REQUIRE(!set_off_result->HasError());
   REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
 
   named_parameter_map_t override_on;

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": ".cursor/hooks/pre-push-format.sh",
+        "matcher": "^git push(\\s|$)",
+        "timeout": 180,
+        "failClosed": true
+      }
+    ]
+  }
+}
