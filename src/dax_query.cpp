@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <string>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -32,16 +33,6 @@ namespace duckdb {
 namespace {
 
 static constexpr int64_t DEFAULT_SCHEMA_PROBE_ROWS = 100;
-
-static string
-GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
-                          const string &name) {
-  auto entry = named_parameters.find(name);
-  if (entry == named_parameters.end() || entry->second.IsNull()) {
-    return string();
-  }
-  return Trimmed(entry->second.GetValue<string>());
-}
 
 } // namespace
 
@@ -81,6 +72,8 @@ struct DaxQueryBindData : public TableFunctionData {
            effective_user_name == other.effective_user_name &&
            timeout_ms == other.timeout_ms;
   }
+
+  bool SupportStatementCache() const override { return false; }
 
   PowerBIConnectionConfig config;
   PowerBIResolvedTarget target;
@@ -235,6 +228,14 @@ private:
                 }
                 current_chunk = CreateChunk();
                 current_chunk_size = 0;
+              }
+
+              if (row.size() != columns.size()) {
+                throw IOException(
+                    "XMLA row column count (%llu) does not match bound schema "
+                    "(%llu)",
+                    static_cast<unsigned long long>(row.size()),
+                    static_cast<unsigned long long>(columns.size()));
               }
 
               for (idx_t column_idx = 0; column_idx < row.size();
@@ -464,6 +465,36 @@ static bool LimitedSchemaProbeFailureAllowsFullRetry(const Exception &ex) {
   return msg.find("xmla schema probe failed") != string::npos;
 }
 
+static bool TryRecoverFromProbeFailure(
+    const string &message, const PowerBIConnectionConfig &config,
+    PowerBIResolvedTarget &target, bool &target_from_cache,
+    const string &power_bi_aad_token, int64_t timeout_ms, string &xmla_catalog,
+    string &xmla_auth_scheme, string &xmla_access_token,
+    const std::function<std::vector<XmlaColumn>()> &probe_schema_with_fallback,
+    std::vector<XmlaColumn> &columns) {
+  if (IsMwcXmlaUnauthorized(xmla_auth_scheme, message)) {
+    FallbackToLegacyBearerXmla(config, target, power_bi_aad_token, timeout_ms,
+                               xmla_catalog, xmla_auth_scheme, xmla_access_token);
+    columns = probe_schema_with_fallback();
+    return true;
+  }
+  if (config.is_direct_xmla || !target_from_cache) {
+    return false;
+  }
+  InvalidateCachedTarget(config);
+  target_from_cache = false;
+  auto resolver_start = std::chrono::steady_clock::now();
+  target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
+                              power_bi_aad_token, timeout_ms);
+  DebugTiming("ResolvePowerBITarget retry", resolver_start);
+  StoreCachedTarget(config, target);
+  ApplyXmlaAuthForResolvedPowerBiTarget(config, target, power_bi_aad_token,
+                                        timeout_ms, xmla_catalog,
+                                        xmla_auth_scheme, xmla_access_token);
+  columns = probe_schema_with_fallback();
+  return true;
+}
+
 static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
                                              TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types,
@@ -570,48 +601,18 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     try {
       columns = probe_schema_with_fallback();
     } catch (const Exception &ex) {
-      if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
-        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
-                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
-                                   xmla_access_token);
-        columns = probe_schema_with_fallback();
-      } else {
-        if (config.is_direct_xmla || !target_from_cache) {
-          throw;
-        }
-        InvalidateCachedTarget(config);
-        target_from_cache = false;
-        auto resolver_start = std::chrono::steady_clock::now();
-        target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                      power_bi_aad_token, timeout_ms);
-        DebugTiming("ResolvePowerBITarget retry", resolver_start);
-        StoreCachedTarget(config, target);
-        ApplyXmlaAuthForResolvedPowerBiTarget(
-            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
-            xmla_auth_scheme, xmla_access_token);
-        columns = probe_schema_with_fallback();
+      if (!TryRecoverFromProbeFailure(ex.what(), config, target, target_from_cache,
+                                      power_bi_aad_token, timeout_ms, xmla_catalog,
+                                      xmla_auth_scheme, xmla_access_token,
+                                      probe_schema_with_fallback, columns)) {
+        throw;
       }
     } catch (const std::exception &ex) {
-      if (IsMwcXmlaUnauthorized(xmla_auth_scheme, ex.what())) {
-        FallbackToLegacyBearerXmla(config, target, power_bi_aad_token,
-                                   timeout_ms, xmla_catalog, xmla_auth_scheme,
-                                   xmla_access_token);
-        columns = probe_schema_with_fallback();
-      } else {
-        if (config.is_direct_xmla || !target_from_cache) {
-          throw;
-        }
-        InvalidateCachedTarget(config);
-        target_from_cache = false;
-        auto resolver_start = std::chrono::steady_clock::now();
-        target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                                      power_bi_aad_token, timeout_ms);
-        DebugTiming("ResolvePowerBITarget retry", resolver_start);
-        StoreCachedTarget(config, target);
-        ApplyXmlaAuthForResolvedPowerBiTarget(
-            config, target, power_bi_aad_token, timeout_ms, xmla_catalog,
-            xmla_auth_scheme, xmla_access_token);
-        columns = probe_schema_with_fallback();
+      if (!TryRecoverFromProbeFailure(ex.what(), config, target, target_from_cache,
+                                      power_bi_aad_token, timeout_ms, xmla_catalog,
+                                      xmla_auth_scheme, xmla_access_token,
+                                      probe_schema_with_fallback, columns)) {
+        throw;
       }
     }
     StoreCachedSchema(target, dax_text, effective_user_name, columns);

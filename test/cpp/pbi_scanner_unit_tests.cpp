@@ -9,6 +9,9 @@
 #include "xmla.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/extension_helper.hpp"
 
 #include <string>
 
@@ -283,4 +286,27 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
           "Amount|Amount_2|Amount_3");
+}
+
+TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {
+  DuckDB db(nullptr);
+  ExtensionHelper::LoadExtension(db, "pbi_scanner");
+  Connection con(db);
+  auto &context = *con.context;
+
+  named_parameter_map_t empty;
+  REQUIRE(ResolveNormalizeDaxColumnNames(context, empty));
+
+  auto set_result =
+      con.Query("SET pbi_scanner_normalize_dax_column_names = false");
+  REQUIRE(!set_result->HasError());
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
+
+  named_parameter_map_t override_on;
+  override_on["normalize_column_names"] = Value::BOOLEAN(true);
+  REQUIRE(ResolveNormalizeDaxColumnNames(context, override_on));
+
+  named_parameter_map_t override_off;
+  override_off["normalize_column_names"] = Value::BOOLEAN(false);
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, override_off));
 }

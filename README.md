@@ -162,6 +162,34 @@ FROM dax_query(
 );
 ```
 
+### Schema probe row limit
+
+`dax_query` uses a limited schema probe (`TOPN`) during bind to discover column
+types without scanning the full result. Control the row limit with a named
+parameter or a process-wide environment variable:
+
+```sql
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ''Fact Allocation''',
+    schema_probe_rows := 50
+);
+```
+
+```bash
+export PBI_SCANNER_SCHEMA_PROBE_ROWS=50
+```
+
+When unset, the default is 100 rows. Set `schema_probe_rows := 0` per query to
+probe with the full DAX statement when a limited probe is not applicable.
+
+Live check (requires workspace auth in `.env` or `PBI_BENCH_*`):
+
+```bash
+uv run --group bench verify_dax_column_names.py
+```
+
 Quick Start already shows the Azure CLI mode and the Azure secret mode end to end.
 Use this section as reference for secret variants and other auth modes.
 
