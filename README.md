@@ -135,13 +135,26 @@ When both are provided, per-call named `auth_mode := ...` overrides the session
 By default, `dax_query` and the `pbi_*` metadata table functions normalize XMLA
 column names for DuckDB: DAX square brackets are removed and table qualifiers
 are dropped (`Fact[Amount]` becomes `Amount`, `[Total Sales]` becomes
-`Total Sales`). DuckDB quotes identifiers with spaces when you reference them
-in SQL.
+`Total Sales`). When the same column name appears more than once, qualified
+names are disambiguated with a table prefix (`TableA[Amount]` and
+`TableB[Amount]` become `TableA_Amount` and `TableB_Amount`). DuckDB quotes
+identifiers with spaces when you reference them in SQL.
 
-To return XMLA names unchanged (including brackets and qualifiers):
+Control normalization with a session default:
 
 ```sql
 SET pbi_scanner_normalize_dax_column_names = false;
+```
+
+Per-call named parameter overrides the session default for that query:
+
+```sql
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ''Fact Allocation''',
+    normalize_column_names := false
+);
 ```
 
 Quick Start already shows the Azure CLI mode and the Azure secret mode end to end.

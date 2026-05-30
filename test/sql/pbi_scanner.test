@@ -154,6 +154,21 @@ SELECT __pbi_scanner_test_format_dax_column_name('Rate', true);
 ----
 Rate
 
+query T
+SELECT __pbi_scanner_test_format_dax_column_names('TableA[Amount]|TableB[Amount]', true);
+----
+TableA_Amount|TableB_Amount
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_names('TableA[Amount]|[Amount]|TableB[Amount]', true);
+----
+TableA_Amount|Amount|TableB_Amount
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_names('[Amount]|[Amount]', true);
+----
+Amount|Amount_2
+
 statement ok
 SET pbi_scanner_normalize_dax_column_names = false;
 

@@ -10,7 +10,7 @@
 ## Architecture Pointers
 
 - `src/pbi_scanner_extension.cpp` registers extension options and SQL table functions.
-- `src/dax_column_names.cpp` formats XMLA column names for DuckDB bind output (`pbi_scanner_normalize_dax_column_names`, default on).
+- `src/dax_column_names.cpp` formats XMLA column names for DuckDB bind output (`pbi_scanner_normalize_dax_column_names` session default and `normalize_column_names` named param, default on).
 - `src/dax_query.cpp` owns DuckDB table-function binding/execution for DAX results and metadata table functions.
 - `src/auth.cpp` handles Azure CLI, access-token, service-principal, and DuckDB `TYPE azure` secret auth.
 - `src/powerbi_resolver.cpp` resolves Power BI locators to XMLA endpoints and MWC tokens.

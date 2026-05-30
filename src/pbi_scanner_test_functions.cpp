@@ -225,6 +225,33 @@ static void FormatDaxColumnNameTestFunction(DataChunk &args,
       });
 }
 
+static void FormatDaxColumnNamesTestFunction(DataChunk &args,
+                                             ExpressionState &state,
+                                             Vector &result) {
+  BinaryExecutor::Execute<string_t, bool, string_t>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t raw_names, bool normalize) {
+        std::vector<string> names;
+        auto input = raw_names.GetString();
+        idx_t start = 0;
+        for (idx_t i = 0; i <= input.size(); i++) {
+          if (i == input.size() || input[i] == '|') {
+            names.push_back(input.substr(start, i - start));
+            start = i + 1;
+          }
+        }
+        auto formatted = FormatDaxColumnNamesForDuckDB(names, normalize);
+        string joined;
+        for (idx_t i = 0; i < formatted.size(); i++) {
+          if (i > 0) {
+            joined.push_back('|');
+          }
+          joined += formatted[i];
+        }
+        return StringVector::AddString(result, joined);
+      });
+}
+
 } // namespace
 
 void RegisterPbiScannerTestFunctions(ExtensionLoader &loader) {
@@ -269,6 +296,10 @@ void RegisterPbiScannerTestFunctions(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_format_dax_column_name",
                      {LogicalType::VARCHAR, LogicalType::BOOLEAN},
                      LogicalType::VARCHAR, FormatDaxColumnNameTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_format_dax_column_names",
+                     {LogicalType::VARCHAR, LogicalType::BOOLEAN},
+                     LogicalType::VARCHAR, FormatDaxColumnNamesTestFunction));
 }
 
 } // namespace duckdb
