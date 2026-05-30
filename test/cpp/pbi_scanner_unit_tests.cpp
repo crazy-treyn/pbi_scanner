@@ -265,7 +265,8 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(FormatDaxColumnNameForDuckDB("[x]", true) == "x");
   REQUIRE(FormatDaxColumnNameForDuckDB("[Total Sales]", true) == "Total Sales");
   REQUIRE(FormatDaxColumnNameForDuckDB("Fact[Amount]", true) == "Amount");
-  REQUIRE(FormatDaxColumnNameForDuckDB("[Total Sales]", false) == "[Total Sales]");
+  REQUIRE(FormatDaxColumnNameForDuckDB("[Total Sales]", false) ==
+          "[Total Sales]");
   REQUIRE(FormatDaxColumnNameForDuckDB("Rate", true) == "Rate");
 
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
@@ -274,15 +275,16 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("TableA[Amount]|[Amount]|TableB[Amount]"),
               true)) == "TableA_Amount|Amount|TableB_Amount");
-  REQUIRE(JoinPipeDelimited(
-              FormatDaxColumnNamesForDuckDB(SplitPipeDelimited("[Amount]|[Amount]"),
-                                          true)) == "Amount|Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("[Amount]|[Amount]"), true)) ==
+          "Amount|Amount_2");
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("TableA[Amount]|TableA[Amount]"), true)) ==
           "TableA_Amount|TableA_Amount_2");
-  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
-              SplitPipeDelimited("TableA[Amount]|TableB[Amount]|[TableA_Amount]"),
-              true)) == "TableA_Amount|TableB_Amount|TableA_Amount_2");
+  REQUIRE(
+      JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+          SplitPipeDelimited("TableA[Amount]|TableB[Amount]|[TableA_Amount]"),
+          true)) == "TableA_Amount|TableB_Amount|TableA_Amount_2");
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
           "Amount|Amount_2|Amount_3");

@@ -474,7 +474,8 @@ static bool TryRecoverFromProbeFailure(
     std::vector<XmlaColumn> &columns) {
   if (IsMwcXmlaUnauthorized(xmla_auth_scheme, message)) {
     FallbackToLegacyBearerXmla(config, target, power_bi_aad_token, timeout_ms,
-                               xmla_catalog, xmla_auth_scheme, xmla_access_token);
+                               xmla_catalog, xmla_auth_scheme,
+                               xmla_access_token);
     columns = probe_schema_with_fallback();
     return true;
   }
@@ -485,7 +486,7 @@ static bool TryRecoverFromProbeFailure(
   target_from_cache = false;
   auto resolver_start = std::chrono::steady_clock::now();
   target = ResolvePowerBITarget(config.endpoint, config.initial_catalog,
-                              power_bi_aad_token, timeout_ms);
+                                power_bi_aad_token, timeout_ms);
   DebugTiming("ResolvePowerBITarget retry", resolver_start);
   StoreCachedTarget(config, target);
   ApplyXmlaAuthForResolvedPowerBiTarget(config, target, power_bi_aad_token,
@@ -601,17 +602,17 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     try {
       columns = probe_schema_with_fallback();
     } catch (const Exception &ex) {
-      if (!TryRecoverFromProbeFailure(ex.what(), config, target, target_from_cache,
-                                      power_bi_aad_token, timeout_ms, xmla_catalog,
-                                      xmla_auth_scheme, xmla_access_token,
-                                      probe_schema_with_fallback, columns)) {
+      if (!TryRecoverFromProbeFailure(
+              ex.what(), config, target, target_from_cache, power_bi_aad_token,
+              timeout_ms, xmla_catalog, xmla_auth_scheme, xmla_access_token,
+              probe_schema_with_fallback, columns)) {
         throw;
       }
     } catch (const std::exception &ex) {
-      if (!TryRecoverFromProbeFailure(ex.what(), config, target, target_from_cache,
-                                      power_bi_aad_token, timeout_ms, xmla_catalog,
-                                      xmla_auth_scheme, xmla_access_token,
-                                      probe_schema_with_fallback, columns)) {
+      if (!TryRecoverFromProbeFailure(
+              ex.what(), config, target, target_from_cache, power_bi_aad_token,
+              timeout_ms, xmla_catalog, xmla_auth_scheme, xmla_access_token,
+              probe_schema_with_fallback, columns)) {
         throw;
       }
     }

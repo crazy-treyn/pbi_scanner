@@ -27,10 +27,11 @@ static ParsedDaxColumnName ParseDaxColumnNameParts(const string &raw_name) {
     parsed.column_part = Trimmed(name.substr(1, name.size() - 2));
   } else {
     auto open_bracket = name.find('[');
-    if (open_bracket != string::npos && open_bracket > 0 && name.back() == ']') {
+    if (open_bracket != string::npos && open_bracket > 0 &&
+        name.back() == ']') {
       parsed.table_part = Trimmed(name.substr(0, open_bracket));
-      parsed.column_part =
-          Trimmed(name.substr(open_bracket + 1, name.size() - open_bracket - 2));
+      parsed.column_part = Trimmed(
+          name.substr(open_bracket + 1, name.size() - open_bracket - 2));
     } else {
       parsed.column_part = name;
     }
@@ -74,7 +75,7 @@ bool ResolveNormalizeDaxColumnNames(
 
 std::vector<string>
 FormatDaxColumnNamesForDuckDB(const std::vector<string> &raw_names,
-                             bool normalize) {
+                              bool normalize) {
   if (!normalize || raw_names.empty()) {
     return raw_names;
   }
