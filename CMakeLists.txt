@@ -55,6 +55,9 @@ if(NOT EMSCRIPTEN)
                         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
   target_include_directories(pbi_scanner_unit_tests PRIVATE
                              ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/catch)
+  # Match duckdb/test/CMakeLists.txt link order: duckdb_static before the generated
+  # extension loader so Linux linkers resolve ExtensionHelper::LoadAllExtensions.
+  target_link_libraries(pbi_scanner_unit_tests duckdb_static)
   link_extension_libraries(pbi_scanner_unit_tests "")
   target_link_pbi_scanner_deps(pbi_scanner_unit_tests)
 
