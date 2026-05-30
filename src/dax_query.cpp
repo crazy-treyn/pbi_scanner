@@ -2,6 +2,7 @@
 
 #include "auth.hpp"
 #include "connection_string.hpp"
+#include "dax_column_names.hpp"
 #include "dax_probe.hpp"
 #include "metadata_cache.hpp"
 #include "pbi_scanner_util.hpp"
@@ -626,8 +627,10 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     throw IOException("DAX query returned no columns");
   }
 
+  auto normalize_column_names = ResolveNormalizeDaxColumnNames(context);
   for (const auto &column : columns) {
-    names.push_back(column.name);
+    names.push_back(
+        FormatDaxColumnNameForDuckDB(column.name, normalize_column_names));
     return_types.push_back(column.duckdb_type);
   }
 

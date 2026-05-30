@@ -1,6 +1,7 @@
 #include "pbi_scanner_test_functions.hpp"
 
 #include "auth.hpp"
+#include "dax_column_names.hpp"
 #include "dax_probe.hpp"
 #include "metadata_cache.hpp"
 #include "pbi_scanner_util.hpp"
@@ -212,6 +213,18 @@ static void DaxSchemaProbeTestFunction(DataChunk &args, ExpressionState &state,
       });
 }
 
+static void FormatDaxColumnNameTestFunction(DataChunk &args,
+                                            ExpressionState &state,
+                                            Vector &result) {
+  BinaryExecutor::Execute<string_t, bool, string_t>(
+      args.data[0], args.data[1], result, args.size(),
+      [&](string_t raw_name, bool normalize) {
+        auto formatted = FormatDaxColumnNameForDuckDB(raw_name.GetString(),
+                                                    normalize);
+        return StringVector::AddString(result, formatted);
+      });
+}
+
 } // namespace
 
 void RegisterPbiScannerTestFunctions(ExtensionLoader &loader) {
@@ -252,6 +265,10 @@ void RegisterPbiScannerTestFunctions(ExtensionLoader &loader) {
       ScalarFunction("__pbi_scanner_test_dax_schema_probe",
                      {LogicalType::VARCHAR, LogicalType::BIGINT},
                      LogicalType::VARCHAR, DaxSchemaProbeTestFunction));
+  loader.RegisterFunction(
+      ScalarFunction("__pbi_scanner_test_format_dax_column_name",
+                     {LogicalType::VARCHAR, LogicalType::BOOLEAN},
+                     LogicalType::VARCHAR, FormatDaxColumnNameTestFunction));
 }
 
 } // namespace duckdb

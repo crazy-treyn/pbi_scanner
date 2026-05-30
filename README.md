@@ -130,6 +130,20 @@ SET pbi_scanner_auth_mode = 'azure_cli';
 When both are provided, per-call named `auth_mode := ...` overrides the session
 `SET` value for that call.
 
+### DAX column names
+
+By default, `dax_query` and the `pbi_*` metadata table functions normalize XMLA
+column names for DuckDB: DAX square brackets are removed and table qualifiers
+are dropped (`Fact[Amount]` becomes `Amount`, `[Total Sales]` becomes
+`Total Sales`). DuckDB quotes identifiers with spaces when you reference them
+in SQL.
+
+To return XMLA names unchanged (including brackets and qualifiers):
+
+```sql
+SET pbi_scanner_normalize_dax_column_names = false;
+```
+
 Quick Start already shows the Azure CLI mode and the Azure secret mode end to end.
 Use this section as reference for secret variants and other auth modes.
 

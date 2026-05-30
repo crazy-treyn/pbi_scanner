@@ -130,6 +130,42 @@ SELECT __pbi_scanner_test_dax_schema_probe('EVALUATE ROW("x", 1)', 0);
 EVALUATE ROW("x", 1)
 
 query T
+SELECT __pbi_scanner_test_format_dax_column_name('[x]', true);
+----
+x
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_name('[Total Sales]', true);
+----
+Total Sales
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_name('Fact[Amount]', true);
+----
+Amount
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_name('[Total Sales]', false);
+----
+[Total Sales]
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_name('Rate', true);
+----
+Rate
+
+statement ok
+SET pbi_scanner_normalize_dax_column_names = false;
+
+query T
+SELECT __pbi_scanner_test_format_dax_column_name('[x]', true);
+----
+x
+
+statement ok
+SET pbi_scanner_normalize_dax_column_names = true;
+
+query T
 SELECT __pbi_scanner_test_service_principal_error_message('request_error');
 ----
 service principal token request failed: simulated_request_error
