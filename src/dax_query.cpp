@@ -33,13 +33,6 @@ namespace {
 
 static constexpr int64_t DEFAULT_SCHEMA_PROBE_ROWS = 100;
 
-static bool
-HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
-                         const string &name) {
-  auto entry = named_parameters.find(name);
-  return entry != named_parameters.end() && !entry->second.IsNull();
-}
-
 static string
 GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
                           const string &name) {

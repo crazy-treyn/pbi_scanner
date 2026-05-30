@@ -274,4 +274,13 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(JoinPipeDelimited(
               FormatDaxColumnNamesForDuckDB(SplitPipeDelimited("[Amount]|[Amount]"),
                                           true)) == "Amount|Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("TableA[Amount]|TableA[Amount]"), true)) ==
+          "TableA_Amount|TableA_Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("TableA[Amount]|TableB[Amount]|[TableA_Amount]"),
+              true)) == "TableA_Amount|TableB_Amount|TableA_Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
+          "Amount|Amount_2|Amount_3");
 }

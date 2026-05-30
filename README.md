@@ -137,8 +137,13 @@ column names for DuckDB: DAX square brackets are removed and table qualifiers
 are dropped (`Fact[Amount]` becomes `Amount`, `[Total Sales]` becomes
 `Total Sales`). When the same column name appears more than once, qualified
 names are disambiguated with a table prefix (`TableA[Amount]` and
-`TableB[Amount]` become `TableA_Amount` and `TableB_Amount`). DuckDB quotes
-identifiers with spaces when you reference them in SQL.
+`TableB[Amount]` become `TableA_Amount` and `TableB_Amount`); any remaining
+collisions get numeric suffixes (`Amount_2`, `TableA_Amount_2`, etc.).
+
+**Breaking change:** normalization is on by default. Existing queries that
+reference bracketed DAX column names must opt out (below) or update column
+references. DuckDB quotes identifiers with spaces when you reference them in
+SQL.
 
 Control normalization with a session default:
 

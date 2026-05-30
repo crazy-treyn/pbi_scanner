@@ -2,10 +2,10 @@
 
 #include "pbi_scanner_util.hpp"
 
-#include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include <unordered_map>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -15,12 +15,6 @@ struct ParsedDaxColumnName {
   string table_part;
   string column_part;
 };
-
-static bool HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
-                                     const string &name) {
-  auto entry = named_parameters.find(name);
-  return entry != named_parameters.end() && !entry->second.IsNull();
-}
 
 static ParsedDaxColumnName ParseDaxColumnNameParts(const string &raw_name) {
   ParsedDaxColumnName parsed;
@@ -48,23 +42,26 @@ static ParsedDaxColumnName ParseDaxColumnNameParts(const string &raw_name) {
   return parsed;
 }
 
-static string FormatUniqueDaxColumnName(const ParsedDaxColumnName &parsed,
-                                        idx_t bare_duplicate_index) {
-  if (!parsed.table_part.empty()) {
-    return parsed.table_part + "_" + parsed.column_part;
+static string MakeUniqueColumnName(string name,
+                                   std::unordered_set<string> &used) {
+  if (used.insert(name).second) {
+    return name;
   }
-  if (bare_duplicate_index == 0) {
-    return parsed.column_part;
+  for (idx_t suffix = 2;; ++suffix) {
+    auto candidate = name + "_" + std::to_string(suffix);
+    if (used.insert(candidate).second) {
+      return candidate;
+    }
   }
-  return parsed.column_part + "_" + std::to_string(bare_duplicate_index + 1);
 }
 
 } // namespace
 
 bool ResolveNormalizeDaxColumnNames(
     ClientContext &context, const named_parameter_map_t &named_parameters) {
-  if (HasNonNullNamedParameter(named_parameters, "normalize_column_names")) {
-    return named_parameters.find("normalize_column_names")->second.GetValue<bool>();
+  auto entry = named_parameters.find("normalize_column_names");
+  if (entry != named_parameters.end() && !entry->second.IsNull()) {
+    return entry->second.GetValue<bool>();
   }
   Value setting;
   if (!context.TryGetCurrentSetting("pbi_scanner_normalize_dax_column_names",
@@ -78,10 +75,7 @@ bool ResolveNormalizeDaxColumnNames(
 std::vector<string>
 FormatDaxColumnNamesForDuckDB(const std::vector<string> &raw_names,
                              bool normalize) {
-  if (!normalize) {
-    return raw_names;
-  }
-  if (raw_names.empty()) {
+  if (!normalize || raw_names.empty()) {
     return raw_names;
   }
 
@@ -96,19 +90,19 @@ FormatDaxColumnNamesForDuckDB(const std::vector<string> &raw_names,
     column_counts[entry.column_part]++;
   }
 
-  std::unordered_map<string, idx_t> bare_duplicate_indexes;
+  std::unordered_set<string> used;
   std::vector<string> result;
   result.reserve(raw_names.size());
   for (const auto &entry : parsed) {
+    string candidate;
     if (column_counts[entry.column_part] <= 1) {
-      result.push_back(entry.column_part);
-      continue;
+      candidate = entry.column_part;
+    } else if (!entry.table_part.empty()) {
+      candidate = entry.table_part + "_" + entry.column_part;
+    } else {
+      candidate = entry.column_part;
     }
-    idx_t bare_index = 0;
-    if (entry.table_part.empty()) {
-      bare_index = bare_duplicate_indexes[entry.column_part]++;
-    }
-    result.push_back(FormatUniqueDaxColumnName(entry, bare_index));
+    result.push_back(MakeUniqueColumnName(std::move(candidate), used));
   }
   return result;
 }

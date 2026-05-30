@@ -12,17 +12,25 @@ include extension-ci-tools/makefiles/duckdb_extension.Makefile
 pbi_scanner_unit_tests:
 	./$(or $(BUILD_DIR),build/release)/pbi_scanner_unit_tests
 
+# CI runs `make test_release`, which resolves to test_release_internal from
+# extension-ci-tools/makefiles/duckdb_extension.Makefile. We shadow those
+# *_internal targets here to append Catch tests after the DuckDB unittest sweep.
+# Keep the unittest invocation in sync with upstream when bumping extension-ci-tools.
+define RUN_PBI_EXTENSION_UNIT_TESTS
+$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/$(1)
+endef
+
 test_release_internal:
 	./build/release/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
-	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/release
+	$(call RUN_PBI_EXTENSION_UNIT_TESTS,release)
 
 test_debug_internal:
 	./build/debug/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
-	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/debug
+	$(call RUN_PBI_EXTENSION_UNIT_TESTS,debug)
 
 test_reldebug_internal:
 	./build/reldebug/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
-	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/reldebug
+	$(call RUN_PBI_EXTENSION_UNIT_TESTS,reldebug)
 
 test-pbi-offline: pbi_scanner_unit_tests
 	./build/release/test/unittest "test/sql/pbi_scanner.test"
