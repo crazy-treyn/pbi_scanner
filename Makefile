@@ -6,6 +6,27 @@ export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
+.PHONY: pbi_scanner_unit_tests test-pbi-offline
+
+# BUILD_DIR selects release/debug/reldebug output (default: build/release).
+pbi_scanner_unit_tests:
+	./$(or $(BUILD_DIR),build/release)/pbi_scanner_unit_tests
+
+test_release_internal:
+	./build/release/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
+	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/release
+
+test_debug_internal:
+	./build/debug/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
+	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/debug
+
+test_reldebug_internal:
+	./build/reldebug/$(TEST_PATH) "$(TESTS_BASE_DIRECTORY)*"
+	$(MAKE) pbi_scanner_unit_tests BUILD_DIR=build/reldebug
+
+test-pbi-offline: pbi_scanner_unit_tests
+	./build/release/test/unittest "test/sql/pbi_scanner.test"
+
 .PHONY: ensure-uv
 ensure-uv:
 	@if command -v uv >/dev/null 2>&1; then \

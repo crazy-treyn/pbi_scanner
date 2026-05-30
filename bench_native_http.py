@@ -2,16 +2,17 @@
 """
 Benchmark and smoke-test native HTTP XMLA execution via dax_query.
 
-**CI / offline:** use `--smoke` only—no auth, no live Power BI. This complements
-sqllogictest (`test/sql/pbi_scanner.test`) with a quick load + XMLA parse self-test.
+**CI / offline:** use `--smoke` only—no auth, no live Power BI. Dual-path check:
+load the built extension and confirm `dax_query` is registered, plus Catch
+`[smoke]` unit tests (former `__pbi_scanner_test_*` sqllogictest coverage).
 
 **Local real-query performance:** prefer `query_semantic_model_minimal.py` (see
 README) for benchmarking against your workspace with real DAX. This script is an
 optional generic alternative (`--live` + PBI_BENCH_*): it uses the bundled
 `./build/release/duckdb` CLI (no Python `duckdb.connect` required).
 
-1) Offline smoke (no credentials): load the built extension and run the
-   XMLA parse self-test (same as test/sql/pbi_scanner.test).
+1) Offline smoke (no credentials): LOAD extension + `dax_query` registration check,
+   then `pbi_scanner_unit_tests "[smoke]"`.
 
    uv run bench_native_http.py --smoke
 
@@ -33,11 +34,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 from time import perf_counter
 
 from bench_duckdb_cli import (
+    escape_sql_literal,
     one_shot_count_sql,
     parse_last_c_column_count,
     require_release_artifacts,
@@ -46,29 +49,32 @@ from bench_duckdb_cli import (
 
 REPO = Path(__file__).resolve().parent
 
-PARSE_SQL = r"""
-SELECT __pbi_scanner_test_parse_chunked_double(
-  '<?xml version="1.0" encoding="utf-8"?><root><schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:schema><xsd:complexType name="row"><xsd:sequence><xsd:element name="Rate" type="xsd:double" /></xsd:sequence></xsd:complexType></xsd:schema></schema><row><Rate>1.125E2</Ra',
-  'te></row></root>'
-);
-""".strip()
+
+def unit_tests_binary() -> Path:
+    name = "pbi_scanner_unit_tests.exe" if sys.platform == "win32" else "pbi_scanner_unit_tests"
+    return REPO / "build" / "release" / name
 
 
-def extension_sql_path(extension_path: Path) -> str:
-    return str(extension_path).replace("'", "''")
+def load_check_sql(ext_path: Path) -> str:
+    load = escape_sql_literal(str(ext_path))
+    return (
+        f"LOAD '{load}'; "
+        "SELECT count(*) AS c FROM duckdb_functions() WHERE function_name='dax_query';"
+    )
 
 
-def run_smoke() -> None:
-    try:
-        ext_path, _ = require_release_artifacts(REPO)
-    except FileNotFoundError as exc:
-        print(str(exc), file=sys.stderr)
+def run_unit_tests_smoke() -> None:
+    binary = unit_tests_binary()
+    if not binary.is_file():
+        print(f"Missing {binary}. Run `make release` first.", file=sys.stderr)
         sys.exit(1)
-
-    load = extension_sql_path(ext_path)
-    sql = f"LOAD '{load}'; " + PARSE_SQL
     t0 = perf_counter()
-    proc = run_duckdb_cli(REPO, sql, forward_pbi_timings=False)
+    proc = subprocess.run(
+        [str(binary), "[smoke]"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
     if proc.returncode != 0:
         if proc.stderr:
             print(
@@ -86,7 +92,53 @@ def run_smoke() -> None:
             print("(no output)", file=sys.stderr)
         sys.exit(proc.returncode or 1)
     elapsed = perf_counter() - t0
-    print(f"[smoke] parse_chunked_double ok in {elapsed * 1000:.1f} ms")
+    print(f"[smoke] pbi_scanner_unit_tests [smoke] ok in {elapsed * 1000:.1f} ms")
+
+
+def run_load_check() -> None:
+    try:
+        ext_path, _ = require_release_artifacts(REPO)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
+    sql = load_check_sql(ext_path)
+    t0 = perf_counter()
+    proc = run_duckdb_cli(REPO, sql, forward_pbi_timings=False)
+    elapsed = perf_counter() - t0
+    if proc.returncode != 0:
+        if proc.stderr:
+            print(
+                proc.stderr,
+                end="" if proc.stderr.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
+        if proc.stdout:
+            print(
+                proc.stdout,
+                end="" if proc.stdout.endswith("\n") else "\n",
+                file=sys.stderr,
+            )
+        if not proc.stderr and not proc.stdout:
+            print("(no output)", file=sys.stderr)
+        sys.exit(proc.returncode or 1)
+    try:
+        count = parse_last_c_column_count(proc.stdout)
+    except ValueError:
+        print(proc.stdout, file=sys.stderr)
+        sys.exit(1)
+    if count != 1:
+        print(
+            f"[smoke] expected dax_query count=1 after LOAD, got {count}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"[smoke] extension LOAD + dax_query ok in {elapsed * 1000:.1f} ms")
+
+
+def run_smoke() -> None:
+    run_load_check()
+    run_unit_tests_smoke()
 
 
 def run_live() -> None:
@@ -174,7 +226,7 @@ def main() -> None:
     p.add_argument(
         "--smoke",
         action="store_true",
-        help="Offline: load extension + XMLA parse self-test (no network)",
+        help="Offline: LOAD extension + dax_query check and Catch [smoke] tests",
     )
     p.add_argument(
         "--live",

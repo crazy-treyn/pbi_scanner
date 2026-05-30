@@ -17,9 +17,17 @@ include_directories(src/include)
 include_directories(duckdb/third_party/httplib)
 include_directories(duckdb/third_party/yyjson/include)
 
+function(target_link_pbi_scanner_deps target)
+  target_compile_definitions(${target} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+  target_link_libraries(${target} OpenSSL::SSL OpenSSL::Crypto)
+  if(ZLIB_FOUND)
+    target_compile_definitions(${target} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
+    target_link_libraries(${target} ZLIB::ZLIB)
+  endif()
+endfunction()
+
 set(EXTENSION_SOURCES
     src/pbi_scanner_extension.cpp
-    src/pbi_scanner_test_functions.cpp
     src/dax_probe.cpp
     src/dax_column_names.cpp
     src/dax_query.cpp
@@ -39,16 +47,22 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-target_compile_definitions(${EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto)
-if(ZLIB_FOUND)
-  target_compile_definitions(${EXTENSION_NAME} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
-  target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE
-                             CPPHTTPLIB_ZLIB_SUPPORT)
-  target_link_libraries(${EXTENSION_NAME} ZLIB::ZLIB)
-  target_link_libraries(${LOADABLE_EXTENSION_NAME} ZLIB::ZLIB)
+target_link_pbi_scanner_deps(${EXTENSION_NAME})
+target_link_pbi_scanner_deps(${LOADABLE_EXTENSION_NAME})
+
+if(NOT EMSCRIPTEN)
+  add_executable(pbi_scanner_unit_tests test/cpp/pbi_scanner_unit_tests.cpp)
+  set_target_properties(pbi_scanner_unit_tests PROPERTIES
+                        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+  target_include_directories(pbi_scanner_unit_tests PRIVATE
+                             ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/catch)
+  # Match duckdb/test/CMakeLists.txt link order: duckdb_static before the generated
+  # extension loader so Linux linkers resolve ExtensionHelper::LoadAllExtensions.
+  target_link_libraries(pbi_scanner_unit_tests duckdb_static)
+  link_extension_libraries(pbi_scanner_unit_tests "")
+  target_link_pbi_scanner_deps(pbi_scanner_unit_tests)
+
+  add_test(NAME pbi_scanner_unit_tests COMMAND pbi_scanner_unit_tests)
 endif()
 
 install(

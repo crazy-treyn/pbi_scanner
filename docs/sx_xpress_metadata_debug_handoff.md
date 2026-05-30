@@ -94,12 +94,9 @@ Secondary files:
 
 - `src/include/xmla.hpp`
   - exposes `EffectiveExecutionTransportForTesting(...)`
-- `src/pbi_scanner_extension.cpp`
-  - test-only SQL helpers:
-    - `__pbi_scanner_test_coerce_xml_text`
-    - `__pbi_scanner_test_effective_execution_transport`
-- `test/sql/pbi_scanner.test`
-  - asserts execution transport remains `sx_xpress` for metadata-style query text.
+- `test/cpp/pbi_scanner_unit_tests.cpp`
+  - Catch tests for `CoerceXmlValueForTesting` and `EffectiveExecutionTransportForTesting`
+  - asserts execution transport remains `sx_xpress` for metadata-style query text
 - `query_semantic_model_minimal.py`
   - strict metadata summary behavior (`SOFT_FAIL` -> `HARD_FAIL` promotion in strict mode).
 

@@ -3,7 +3,6 @@
 #include "pbi_scanner_extension.hpp"
 #include "dax_query.hpp"
 #include "pbi_scanner_util.hpp"
-#include "pbi_scanner_test_functions.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/database.hpp"
@@ -49,7 +48,6 @@ static void LoadInternal(ExtensionLoader &loader) {
   loader.RegisterFunction(CreatePbiColumnsFunction());
   loader.RegisterFunction(CreatePbiMeasuresFunction());
   loader.RegisterFunction(CreatePbiRelationshipsFunction());
-  RegisterPbiScannerTestFunctions(loader);
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

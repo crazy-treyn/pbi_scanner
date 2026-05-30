@@ -17,13 +17,13 @@
 - `src/xmla.cpp` handles XMLA request/response execution and XML/binary parsing.
 - `src/xmla_transport.cpp` owns `PBI_SCANNER_XMLA_TRANSPORT`; default is `sx_xpress`.
 - `src/metadata_cache.cpp` persists resolved targets/schemas only; never store tokens or secrets in the metadata cache.
-- `src/pbi_scanner_test_functions.cpp` registers private `__pbi_scanner_test_*` SQL helpers used by sqllogictest.
+- `test/cpp/pbi_scanner_unit_tests.cpp` exercises `*ForTesting` hooks via Catch (parser, coercion, cache, auth).
 
 ## Build And Verify
 
 - First setup after clone: `git submodule update --init --recursive`.
 - Default build: `make` or `make release`; artifacts go under `build/release/`.
-- Focused offline test: `./build/release/test/unittest "test/sql/pbi_scanner.test"`.
+- Focused offline tests: `make test-pbi-offline` (sqllogictest + Catch), or individually `./build/release/pbi_scanner_unit_tests` and `./build/release/test/unittest "test/sql/pbi_scanner.test"`.
 - Full offline test suite: `make test`.
 - Format check/fix: `make format-check` and `make format-fix`.
 - Clang-tidy: `make tidy-check`.
@@ -45,7 +45,7 @@
 - Tests under `test/sql/` must be deterministic and offline; do not add live Power BI/Azure requirements there.
 - Prefer sqllogictest coverage for extension behavior, especially user-visible validation errors.
 - If an error message or parse rule changes, update exact `statement error` expectations in `test/sql/pbi_scanner.test`.
-- Offline smoke helper: `uv run bench_native_http.py --smoke`.
+- Offline smoke helper: `uv run bench_native_http.py --smoke` (LOAD + `dax_query` registration, then Catch `[smoke]` tests).
 - Live benchmark/helper: `uv run --group bench query_semantic_model_minimal.py`; use `PBI_BENCH_*` env vars and keep real workspace IDs/secrets in env, `.env` (gitignored), or `local/`.
 - SQL CLI live smoke: `uv run query_semantic_model_sql_minimal.py`; set `PBI_SQL_USE_AZURE_SECRET=1` and `PBI_SQL_AZURE_PROVIDER=service_principal` to exercise DuckDB Azure service-principal secrets.
 
@@ -71,5 +71,5 @@
 - Follow DuckDB formatting (`duckdb/.clang-format`): tabs for indentation, 120-column target, includes are not auto-sorted.
 - Production code lives in `namespace duckdb`; file-local helpers usually belong in an anonymous namespace.
 - Use DuckDB exceptions consistently: `InvalidInputException` for user validation, `IOException` for transport/HTTP/parsing/external-process failures, `InterruptException` for cancellation.
-- Register new public SQL functions through the extension load path; keep private SQL test helpers in `pbi_scanner_test_functions.*`.
+- Register new public SQL functions through the extension load path; add offline coverage in `test/cpp/pbi_scanner_unit_tests.cpp` via existing `*ForTesting` hooks.
 - Keep cross-platform shelling/socket behavior isolated to the existing auth/HTTP layers.
