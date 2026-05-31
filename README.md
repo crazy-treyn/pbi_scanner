@@ -147,7 +147,7 @@ reference them in SQL.
 Enable normalization for the session:
 
 ```sql
-SET pbi_scanner_normalize_dax_column_names = true;
+SET normalize_dax_column_names = true;
 ```
 
 Per-call named parameter overrides the session default for that query:
@@ -157,7 +157,7 @@ SELECT *
 FROM dax_query(
     'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
     'EVALUATE ''Fact Allocation''',
-    normalize_column_names := true
+    normalize_dax_column_names := true
 );
 ```
 

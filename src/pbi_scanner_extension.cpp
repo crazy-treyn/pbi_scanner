@@ -38,10 +38,10 @@ static void LoadInternal(ExtensionLoader &loader) {
                             LogicalType::VARCHAR, Value(""),
                             SetPbiScannerAuthMode);
   config.AddExtensionOption(
-      "pbi_scanner_normalize_dax_column_names",
+      "normalize_dax_column_names",
       "When true, strip DAX square brackets and table qualifiers from "
       "dax_query and pbi_* metadata table function column names (default "
-      "off; opt in via SET or normalize_column_names)",
+      "off; opt in via SET or normalize_dax_column_names)",
       LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
   loader.RegisterFunction(CreateDaxQueryFunction());

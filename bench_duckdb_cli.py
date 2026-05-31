@@ -103,7 +103,7 @@ def dax_query_source_sql(
     *,
     secret_name: str | None = None,
     access_token: str | None = None,
-    normalize_column_names: bool | None = None,
+    normalize_dax_column_names: bool | None = None,
 ) -> str:
     args = [
         f"'{escape_sql_literal(connection_string)}'",
@@ -113,9 +113,9 @@ def dax_query_source_sql(
         args.append(f"access_token := '{escape_sql_literal(access_token)}'")
     elif secret_name:
         args.append(f"secret_name := '{escape_sql_literal(secret_name.strip())}'")
-    if normalize_column_names is not None:
-        flag = "true" if normalize_column_names else "false"
-        args.append(f"normalize_column_names := {flag}")
+    if normalize_dax_column_names is not None:
+        flag = "true" if normalize_dax_column_names else "false"
+        args.append(f"normalize_dax_column_names := {flag}")
     return f"dax_query({', '.join(args)})"
 
 
@@ -125,14 +125,14 @@ def dax_query_limit_zero_sql(
     *,
     secret_name: str | None = None,
     access_token: str | None = None,
-    normalize_column_names: bool | None = None,
+    normalize_dax_column_names: bool | None = None,
 ) -> str:
     source = dax_query_source_sql(
         connection_string,
         dax,
         secret_name=secret_name,
         access_token=access_token,
-        normalize_column_names=normalize_column_names,
+        normalize_dax_column_names=normalize_dax_column_names,
     )
     return f"SELECT * FROM {source} LIMIT 0"
 

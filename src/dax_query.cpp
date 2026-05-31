@@ -409,7 +409,8 @@ static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["effective_user_name"] = LogicalType::VARCHAR;
   function.named_parameters["timeout_ms"] = LogicalType::BIGINT;
   function.named_parameters["schema_probe_rows"] = LogicalType::BIGINT;
-  function.named_parameters["normalize_column_names"] = LogicalType::BOOLEAN;
+  function.named_parameters["normalize_dax_column_names"] =
+      LogicalType::BOOLEAN;
 }
 
 static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
@@ -623,7 +624,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     throw IOException("DAX query returned no columns");
   }
 
-  auto normalize_column_names =
+  auto normalize_dax_column_names =
       ResolveNormalizeDaxColumnNames(context, input.named_parameters);
   std::vector<string> raw_column_names;
   raw_column_names.reserve(columns.size());
@@ -631,8 +632,8 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
     raw_column_names.push_back(column.name);
     return_types.push_back(column.duckdb_type);
   }
-  auto formatted_names =
-      FormatDaxColumnNamesForDuckDB(raw_column_names, normalize_column_names);
+  auto formatted_names = FormatDaxColumnNamesForDuckDB(
+      raw_column_names, normalize_dax_column_names);
   for (auto &name : formatted_names) {
     names.push_back(std::move(name));
   }

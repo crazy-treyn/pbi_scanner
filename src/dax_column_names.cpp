@@ -60,13 +60,12 @@ static string MakeUniqueColumnName(string name,
 
 bool ResolveNormalizeDaxColumnNames(
     ClientContext &context, const named_parameter_map_t &named_parameters) {
-  auto entry = named_parameters.find("normalize_column_names");
+  auto entry = named_parameters.find("normalize_dax_column_names");
   if (entry != named_parameters.end() && !entry->second.IsNull()) {
     return entry->second.GetValue<bool>();
   }
   Value setting;
-  if (!context.TryGetCurrentSetting("pbi_scanner_normalize_dax_column_names",
-                                    setting) ||
+  if (!context.TryGetCurrentSetting("normalize_dax_column_names", setting) ||
       setting.IsNull()) {
     return false;
   }

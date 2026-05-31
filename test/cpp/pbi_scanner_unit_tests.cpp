@@ -299,21 +299,19 @@ TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {
   named_parameter_map_t empty;
   REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
 
-  auto set_on_result =
-      con.Query("SET pbi_scanner_normalize_dax_column_names = true");
+  auto set_on_result = con.Query("SET normalize_dax_column_names = true");
   REQUIRE(!set_on_result->HasError());
   REQUIRE(ResolveNormalizeDaxColumnNames(context, empty));
 
-  auto set_off_result =
-      con.Query("SET pbi_scanner_normalize_dax_column_names = false");
+  auto set_off_result = con.Query("SET normalize_dax_column_names = false");
   REQUIRE(!set_off_result->HasError());
   REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
 
   named_parameter_map_t override_on;
-  override_on["normalize_column_names"] = Value::BOOLEAN(true);
+  override_on["normalize_dax_column_names"] = Value::BOOLEAN(true);
   REQUIRE(ResolveNormalizeDaxColumnNames(context, override_on));
 
   named_parameter_map_t override_off;
-  override_off["normalize_column_names"] = Value::BOOLEAN(false);
+  override_off["normalize_dax_column_names"] = Value::BOOLEAN(false);
   REQUIRE(!ResolveNormalizeDaxColumnNames(context, override_off));
 }
