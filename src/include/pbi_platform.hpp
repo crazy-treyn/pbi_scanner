@@ -2,8 +2,10 @@
 
 #if defined(__EMSCRIPTEN__)
 #define PBI_USES_HTTPLIB_BACKEND 0
+#define PBI_SUPPORTS_BACKGROUND_THREADS 0
 #else
 #define PBI_USES_HTTPLIB_BACKEND 1
+#define PBI_SUPPORTS_BACKGROUND_THREADS 1
 #endif
 
 namespace duckdb {

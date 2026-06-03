@@ -1,6 +1,7 @@
 #include "dax_query.hpp"
 
 #include "auth.hpp"
+#include "pbi_platform.hpp"
 #include "connection_string.hpp"
 #include "dax_column_names.hpp"
 #include "dax_probe.hpp"
@@ -114,18 +115,20 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     } else {
       executor = make_uniq<XmlaExecutor>(bind_data.timeout_ms);
     }
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     worker = std::thread([this]() { RunWorker(); });
 #endif
   }
 
   ~DaxQueryGlobalState() override {
     stop_requested.store(true, std::memory_order_release);
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     condition.notify_all();
+#endif
     if (executor && !finished) {
       executor->Stop();
     }
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     if (worker.joinable()) {
       worker.join();
     }
@@ -135,7 +138,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   idx_t MaxThreads() const override { return 1; }
 
   bool PopChunk(unique_ptr<DataChunk> &chunk, ClientContext &context) {
-#ifdef __EMSCRIPTEN__
+#if !PBI_SUPPORTS_BACKGROUND_THREADS
     if (context.IsInterrupted()) {
       stop_requested.store(true, std::memory_order_release);
       if (executor) {
@@ -193,7 +196,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   std::mutex lock;
   std::condition_variable condition;
   std::deque<unique_ptr<DataChunk>> chunks;
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   std::thread worker;
 #endif
   string error;
@@ -218,8 +221,11 @@ private:
       return true;
     }
 
-#ifdef __EMSCRIPTEN__
+#if !PBI_SUPPORTS_BACKGROUND_THREADS
     if (stop_requested.load(std::memory_order_acquire)) {
+      return false;
+    }
+    if (chunks.size() >= max_buffered_chunks) {
       return false;
     }
     chunks.push_back(std::move(chunk));
@@ -379,7 +385,7 @@ private:
       std::lock_guard<std::mutex> guard(lock);
       finished = true;
     }
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     condition.notify_all();
 #endif
   }
