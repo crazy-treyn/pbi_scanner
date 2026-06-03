@@ -101,6 +101,21 @@ Microsoft endpoint or private XMLA endpoint does not return suitable CORS
 headers for your application origin, route requests through a backend proxy that
 adds the required CORS response headers and keeps credentials server-side.
 
+## Direct XMLA Connection Strings
+
+Browser smoke tests use loopback HTTP, for example
+`Data Source=http://127.0.0.1:<port>/xmla;Initial Catalog=mock;`.
+
+Connection-string parsing allows:
+
+- **HTTPS** direct XMLA with a Power BI-style path containing `/xmla?` (same as
+  native CLI).
+- **HTTP** direct XMLA only when the host is loopback (`127.0.0.1`, `localhost`,
+  or `::1`) and the path contains `/xmla`.
+
+Remote `http://` XMLA URLs are rejected (they do not match the `powerbi://`
+locator pattern either).
+
 ## Current Limitations
 
 - `wasm_mvp` and `wasm_eh` use a synchronous pull execution path rather than the

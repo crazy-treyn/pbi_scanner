@@ -29,6 +29,65 @@ static std::string UrlDecode(const std::string &value) {
   return decoded;
 }
 
+static std::string ExtractUrlAuthorityHost(const std::string &data_source) {
+  auto lower = StringUtil::Lower(data_source);
+  idx_t scheme_len = 0;
+  if (StringUtil::StartsWith(lower, "https://")) {
+    scheme_len = 8;
+  } else if (StringUtil::StartsWith(lower, "http://")) {
+    scheme_len = 7;
+  } else {
+    return std::string();
+  }
+
+  auto remainder = data_source.substr(scheme_len);
+  auto path_pos = remainder.find('/');
+  auto authority =
+      path_pos == std::string::npos ? remainder : remainder.substr(0, path_pos);
+  auto at_pos = authority.find('@');
+  if (at_pos != std::string::npos) {
+    authority = authority.substr(at_pos + 1);
+  }
+  authority = Trimmed(authority);
+  if (authority.empty()) {
+    return std::string();
+  }
+
+  if (!authority.empty() && authority.front() == '[') {
+    auto end_bracket = authority.find(']');
+    if (end_bracket == std::string::npos || end_bracket <= 1) {
+      return std::string();
+    }
+    return StringUtil::Lower(authority.substr(1, end_bracket - 1));
+  }
+
+  auto colon_pos = authority.rfind(':');
+  if (colon_pos != std::string::npos) {
+    return StringUtil::Lower(authority.substr(0, colon_pos));
+  }
+  return StringUtil::Lower(authority);
+}
+
+static bool IsLoopbackXmlaHost(const std::string &data_source) {
+  auto host = ExtractUrlAuthorityHost(data_source);
+  return host == "127.0.0.1" || host == "localhost" || host == "::1" ||
+         host == "0:0:0:0:0:0:0:1";
+}
+
+static bool IsDirectXmlaDataSource(const std::string &data_source) {
+  auto lower = StringUtil::Lower(data_source);
+  if (StringUtil::StartsWith(lower, "https://")) {
+    return data_source.find("/xmla?") != std::string::npos;
+  }
+  if (StringUtil::StartsWith(lower, "http://")) {
+    if (!IsLoopbackXmlaHost(data_source)) {
+      return false;
+    }
+    return data_source.find("/xmla") != std::string::npos;
+  }
+  return false;
+}
+
 PowerBIEndpoint ParsePowerBIEndpoint(const std::string &raw) {
   auto trimmed = Trimmed(raw);
   if (trimmed.empty()) {
@@ -125,10 +184,7 @@ PowerBIConnectionConfig ParsePowerBIConnectionString(const std::string &raw) {
     throw InvalidInputException("Initial Catalog is required");
   }
 
-  auto lower_data_source = StringUtil::Lower(result.data_source);
-  if ((StringUtil::StartsWith(lower_data_source, "https://") ||
-       StringUtil::StartsWith(lower_data_source, "http://")) &&
-      result.data_source.find("/xmla") != std::string::npos) {
+  if (IsDirectXmlaDataSource(result.data_source)) {
     result.is_direct_xmla = true;
   } else {
     result.endpoint = ParsePowerBIEndpoint(result.data_source);

@@ -28,6 +28,9 @@ make tidy-check
 - GitHub tags/releases use a `v` prefix, for example `v0.0.4`.
 - Keep the community descriptor `extension.version` aligned with `extension_config.cmake`.
 - The community descriptor `repo.ref` must point at the validated release commit SHA from this repo.
+- Before publishing, confirm `extension.excluded_platforms` in the community
+  descriptor matches this repo's CI `exclude_archs` and
+  `docs/release_publication.md` (including WASM platforms you intend to ship).
 
 Preferred local release sequence:
 
