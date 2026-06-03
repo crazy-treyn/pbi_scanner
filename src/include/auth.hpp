@@ -16,4 +16,7 @@ ResolvePowerBIAccessToken(ClientContext &context,
 
 string TestServicePrincipalAuthErrorMessage(const string &test_case);
 
+void RejectUnsupportedBrowserAuth(const char *message);
+void RejectUnsupportedBrowserAuthForTesting(const char *message);
+
 } // namespace duckdb

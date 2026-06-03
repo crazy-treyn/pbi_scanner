@@ -33,6 +33,7 @@ function(target_link_pbi_scanner_deps target)
 endfunction()
 
 set(EXTENSION_SOURCES
+    src/pbi_platform.cpp
     src/pbi_scanner_extension.cpp
     src/dax_probe.cpp
     src/dax_column_names.cpp

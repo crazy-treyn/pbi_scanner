@@ -3,6 +3,7 @@
 
 #include "auth.hpp"
 #include "connection_string.hpp"
+#include "pbi_platform.hpp"
 #include "dax_column_names.hpp"
 #include "dax_probe.hpp"
 #include "metadata_cache.hpp"
@@ -289,6 +290,16 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
           "Amount|Amount_2|Amount_3");
+}
+
+TEST_CASE("Native platform capabilities", "[pbi_platform]") {
+  REQUIRE(PbiSupportsNativeAuth());
+  REQUIRE(PbiSupportsFilesystemMetadataCache());
+  REQUIRE(PbiSupportsBackgroundThreads());
+  REQUIRE(PbiSupportsSxStreamingExecution());
+  REQUIRE(!PbiIsBrowserPlatform());
+  REQUIRE_NOTHROW(RejectUnsupportedBrowserAuthForTesting(
+      "azure_cli auth is not supported in DuckDB-Wasm"));
 }
 
 TEST_CASE("Parse direct XMLA connection strings", "[connection_string]") {

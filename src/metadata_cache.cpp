@@ -1,4 +1,5 @@
 #include "metadata_cache.hpp"
+#include "pbi_platform.hpp"
 
 #include "pbi_scanner_util.hpp"
 
@@ -273,17 +274,16 @@ static bool EnsureCacheDirectory(const string &cache_dir) {
 }
 
 static string CacheFilePath(const string &prefix, const string &key) {
-#ifdef __EMSCRIPTEN__
-  (void)prefix;
-  (void)key;
-  return string();
-#else
+  if (!PbiSupportsFilesystemMetadataCache()) {
+    (void)prefix;
+    (void)key;
+    return string();
+  }
   auto cache_dir = DefaultMetadataCacheDirectory();
   if (!EnsureCacheDirectory(cache_dir)) {
     return string();
   }
   return JoinPath(cache_dir, prefix + "_" + HashCacheKey(key) + ".cache");
-#endif
 }
 
 static string LogicalTypeCacheName(const LogicalType &type) {
