@@ -29,6 +29,7 @@ endfunction()
 set(EXTENSION_SOURCES
     src/pbi_scanner_extension.cpp
     src/dax_probe.cpp
+    src/dax_column_names.cpp
     src/dax_query.cpp
     src/metadata_cache.cpp
     src/vector_writer.cpp

@@ -188,23 +188,6 @@ static string ResolveAzureCliModeUncached();
 static string AcquireServicePrincipalTokenUncached(
     const ServicePrincipalCredentials &credentials);
 
-static string
-GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
-                          const string &name) {
-  auto entry = named_parameters.find(name);
-  if (entry == named_parameters.end() || entry->second.IsNull()) {
-    return string();
-  }
-  return Trimmed(entry->second.ToString());
-}
-
-static bool
-HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
-                         const string &name) {
-  auto entry = named_parameters.find(name);
-  return entry != named_parameters.end() && !entry->second.IsNull();
-}
-
 static string GetOptionalEnv(const char *name) {
   auto *value = std::getenv(name);
   if (!value || !*value) {

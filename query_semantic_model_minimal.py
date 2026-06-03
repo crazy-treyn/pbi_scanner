@@ -16,6 +16,8 @@ Configuration (prefer env vars so nothing secret is hardcoded):
       count or materialize; defaults to materialize.
   PBI_BENCH_ITERATIONS
       Runs in the same process; defaults to 1.
+  PBI_BENCH_VERIFY_COLUMN_NAMES
+      Set 1/true to run verify_dax_column_names checks before the benchmark query.
   PBI_BENCH_METADATA_PROBE
       Set 1/true to run pbi_* metadata probes.
   PBI_BENCH_METADATA_FAIL_FAST
@@ -159,6 +161,40 @@ def _bench_config() -> tuple[str, str, str, str]:
         os.environ.get("PBI_BENCH_AUTH_MODE", "").strip() or "azure_cli"
     )
     return cs, dax, secret, _normalize_auth_mode(auth_mode)
+
+
+def prepare_live_bench_connection(
+    con,
+    secret_name: str,
+    default_auth_mode: str,
+) -> tuple[str | None, str | None]:
+    """Configure auth for live dax_query / pbi_* probes.
+
+    Returns (active_secret_name, access_token). Only one is typically set.
+    """
+    use_secret_auth = _truthy_env("PBI_BENCH_USE_DUCKDB_AZURE_SECRET")
+    use_direct_token = os.name == "nt" and not use_secret_auth
+    session_auth_mode = default_auth_mode
+    access_token: str | None = None
+    if use_direct_token:
+        access_token = _az_access_token()
+        session_auth_mode = "access_token"
+
+    con.sql(f"SET pbi_scanner_auth_mode = '{_sql_escape(session_auth_mode)}'")
+
+    active_secret_name: str | None = None
+    if use_secret_auth:
+        active_secret_name = secret_name
+        con.install_extension("azure")
+        con.load_extension("azure")
+        con.sql(f"""
+            CREATE OR REPLACE SECRET {secret_name} (
+                TYPE azure,
+                PROVIDER credential_chain,
+                CHAIN 'cli'
+            )
+            """)
+    return active_secret_name, access_token
 
 
 def _parse_connection_string(connection_string: str) -> dict[str, str]:
@@ -967,6 +1003,35 @@ def run_with_bundled_cli(
 
 def main() -> None:
     connection_string, dax_query, secret_name, auth_mode = _bench_config()
+    if _truthy_env("PBI_BENCH_VERIFY_COLUMN_NAMES"):
+        from verify_dax_column_names import verify_dax_column_normalization  # noqa: PLC0415
+
+        import duckdb  # noqa: PLC0415
+
+        ext_escaped = _sql_escape(str(extension_path))
+        runtime_path = _windows_runtime_path(REPO)
+        if runtime_path:
+            os.environ["PATH"] = runtime_path + os.pathsep + os.environ.get("PATH", "")
+        print("[python] running DAX column name normalization verification")
+        if os.environ.get("PBI_BENCH_DIRECT_XMLA", "").strip():
+            connection_string = resolve_direct_xmla_connection_string(
+                connection_string
+            )
+        con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+        try:
+            con.sql(f"LOAD '{ext_escaped}'")
+            active_secret_name, access_token = prepare_live_bench_connection(
+                con, secret_name, auth_mode
+            )
+            verify_dax_column_normalization(
+                con,
+                connection_string,
+                dax_query,
+                active_secret_name,
+                access_token,
+            )
+        finally:
+            con.close()
 
     from bench_duckdb_cli import python_duckdb_connect_usable  # noqa: PLC0415
 

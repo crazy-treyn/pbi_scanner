@@ -10,7 +10,8 @@
 ## Architecture Pointers
 
 - `src/pbi_scanner_extension.cpp` registers extension options and SQL table functions.
-- `src/dax_query.cpp` owns DuckDB table-function binding/execution for DAX results and metadata table functions.
+- `src/dax_column_names.cpp` formats XMLA column names for DuckDB bind output when opted in via `normalize_dax_column_names` (session SET or per-query named param, default off).
+- `src/dax_query.cpp` owns DuckDB table-function binding/execution for DAX results and metadata table functions. Bind data disables DuckDB statement-cache reuse so auth tokens are resolved fresh on rebind.
 - `src/auth.cpp` handles Azure CLI, access-token, service-principal, and DuckDB `TYPE azure` secret auth.
 - `src/powerbi_resolver.cpp` resolves Power BI locators to XMLA endpoints and MWC tokens.
 - `src/xmla.cpp` handles XMLA request/response execution and XML/binary parsing.
@@ -45,7 +46,9 @@
 - Prefer sqllogictest coverage for extension behavior, especially user-visible validation errors.
 - If an error message or parse rule changes, update exact `statement error` expectations in `test/sql/pbi_scanner.test`.
 - Offline smoke helper: `uv run bench_native_http.py --smoke` (LOAD + `dax_query` registration, then Catch `[smoke]` tests).
+- Optional bind tuning: `PBI_SCANNER_SCHEMA_PROBE_ROWS` sets the default limited schema probe row count (override per query with `schema_probe_rows := ...`).
 - Live benchmark/helper: `uv run --group bench query_semantic_model_minimal.py`; use `PBI_BENCH_*` env vars and keep real workspace IDs/secrets in env, `.env` (gitignored), or `local/`.
+- Live column-name check: `uv run --group bench verify_dax_column_names.py` (or `PBI_BENCH_VERIFY_COLUMN_NAMES=1` before the minimal benchmark).
 - SQL CLI live smoke: `uv run query_semantic_model_sql_minimal.py`; set `PBI_SQL_USE_AZURE_SECRET=1` and `PBI_SQL_AZURE_PROVIDER=service_principal` to exercise DuckDB Azure service-principal secrets.
 
 ## XMLA Transport Notes

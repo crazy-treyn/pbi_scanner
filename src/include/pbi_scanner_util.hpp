@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/function.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -15,6 +16,23 @@ inline string Trimmed(const string &value) {
   auto trimmed = value;
   StringUtil::Trim(trimmed);
   return trimmed;
+}
+
+inline bool
+HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
+                         const string &name) {
+  auto entry = named_parameters.find(name);
+  return entry != named_parameters.end() && !entry->second.IsNull();
+}
+
+inline string
+GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
+                          const string &name) {
+  auto entry = named_parameters.find(name);
+  if (entry == named_parameters.end() || entry->second.IsNull()) {
+    return string();
+  }
+  return Trimmed(entry->second.ToString());
 }
 
 inline bool DebugTimingsEnabled() {

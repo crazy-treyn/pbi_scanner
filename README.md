@@ -130,6 +130,65 @@ SET pbi_scanner_auth_mode = 'azure_cli';
 When both are provided, per-call named `auth_mode := ...` overrides the session
 `SET` value for that call.
 
+### DAX column names
+
+By default, `dax_query` and the `pbi_*` metadata table functions return XMLA
+column names unchanged (including DAX table qualifiers and square brackets).
+
+Opt in to normalization when you want DuckDB-friendly names: DAX square
+brackets are removed and table qualifiers are dropped (`Fact[Amount]` becomes
+`Amount`, `[Total Sales]` becomes `Total Sales`). When the same column name
+appears more than once, qualified names are disambiguated with a table prefix
+(`TableA[Amount]` and `TableB[Amount]` become `TableA_Amount` and
+`TableB_Amount`); any remaining collisions get numeric suffixes (`Amount_2`,
+`TableA_Amount_2`, etc.). DuckDB quotes identifiers with spaces when you
+reference them in SQL.
+
+Enable normalization for the session:
+
+```sql
+SET normalize_dax_column_names = true;
+```
+
+Per-call named parameter overrides the session default for that query:
+
+```sql
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ''Fact Allocation''',
+    normalize_dax_column_names := true
+);
+```
+
+### Schema probe row limit
+
+`dax_query` uses a limited schema probe (`TOPN`) during bind to discover column
+types without scanning the full result. Control the row limit with a named
+parameter or a process-wide environment variable:
+
+```sql
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ''Fact Allocation''',
+    schema_probe_rows := 50
+);
+```
+
+```bash
+export PBI_SCANNER_SCHEMA_PROBE_ROWS=50
+```
+
+When unset, the default is 100 rows. Set `schema_probe_rows := 0` per query to
+probe with the full DAX statement when a limited probe is not applicable.
+
+Live check (requires workspace auth in `.env` or `PBI_BENCH_*`):
+
+```bash
+uv run --group bench verify_dax_column_names.py
+```
+
 Quick Start already shows the Azure CLI mode and the Azure secret mode end to end.
 Use this section as reference for secret variants and other auth modes.
 

@@ -37,6 +37,12 @@ static void LoadInternal(ExtensionLoader &loader) {
                             "(access_token, azure_cli, service_principal)",
                             LogicalType::VARCHAR, Value(""),
                             SetPbiScannerAuthMode);
+  config.AddExtensionOption(
+      "normalize_dax_column_names",
+      "When true, strip DAX square brackets and table qualifiers from "
+      "dax_query and pbi_* metadata table function column names (default "
+      "off; opt in via SET or normalize_dax_column_names)",
+      LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
   loader.RegisterFunction(CreateDaxQueryFunction());
   loader.RegisterFunction(CreatePbiTablesFunction());

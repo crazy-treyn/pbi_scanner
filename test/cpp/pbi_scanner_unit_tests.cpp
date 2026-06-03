@@ -2,12 +2,16 @@
 #include "catch.hpp"
 
 #include "auth.hpp"
+#include "dax_column_names.hpp"
 #include "dax_probe.hpp"
 #include "metadata_cache.hpp"
 #include "pbi_scanner_util.hpp"
 #include "xmla.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/extension_helper.hpp"
 
 #include <string>
 
@@ -117,6 +121,29 @@ static std::string CoerceXmlTextString(const std::string &raw_value,
     return "<NULL>";
   }
   return value.ToString();
+}
+
+static std::string JoinPipeDelimited(const std::vector<string> &values) {
+  string joined;
+  for (idx_t i = 0; i < values.size(); i++) {
+    if (i > 0) {
+      joined.push_back('|');
+    }
+    joined += values[i];
+  }
+  return joined;
+}
+
+static std::vector<string> SplitPipeDelimited(const string &input) {
+  std::vector<string> values;
+  idx_t start = 0;
+  for (idx_t i = 0; i <= input.size(); i++) {
+    if (i == input.size() || input[i] == '|') {
+      values.push_back(input.substr(start, i - start));
+      start = i + 1;
+    }
+  }
+  return values;
 }
 
 } // namespace
@@ -232,4 +259,59 @@ TEST_CASE("XML coercion text", "[xmla]") {
 TEST_CASE("Effective execution transport", "[xmla]") {
   REQUIRE(EffectiveExecutionTransportForTesting(
               "EVALUATE INFO.VIEW.TABLES()") == "sx_xpress");
+}
+
+TEST_CASE("DAX column name normalization", "[dax_column_names]") {
+  REQUIRE(FormatDaxColumnNameForDuckDB("[x]", true) == "x");
+  REQUIRE(FormatDaxColumnNameForDuckDB("[Total Sales]", true) == "Total Sales");
+  REQUIRE(FormatDaxColumnNameForDuckDB("Fact[Amount]", true) == "Amount");
+  REQUIRE(FormatDaxColumnNameForDuckDB("[Total Sales]", false) ==
+          "[Total Sales]");
+  REQUIRE(FormatDaxColumnNameForDuckDB("Rate", true) == "Rate");
+
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("TableA[Amount]|TableB[Amount]"), true)) ==
+          "TableA_Amount|TableB_Amount");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("TableA[Amount]|[Amount]|TableB[Amount]"),
+              true)) == "TableA_Amount|Amount|TableB_Amount");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("[Amount]|[Amount]"), true)) ==
+          "Amount|Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("TableA[Amount]|TableA[Amount]"), true)) ==
+          "TableA_Amount|TableA_Amount_2");
+  REQUIRE(
+      JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+          SplitPipeDelimited("TableA[Amount]|TableB[Amount]|[TableA_Amount]"),
+          true)) == "TableA_Amount|TableB_Amount|TableA_Amount_2");
+  REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
+              SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
+          "Amount|Amount_2|Amount_3");
+}
+
+TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {
+  DuckDB db(nullptr);
+  ExtensionHelper::LoadExtension(db, "pbi_scanner");
+  Connection con(db);
+  auto &context = *con.context;
+
+  named_parameter_map_t empty;
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
+
+  auto set_on_result = con.Query("SET normalize_dax_column_names = true");
+  REQUIRE(!set_on_result->HasError());
+  REQUIRE(ResolveNormalizeDaxColumnNames(context, empty));
+
+  auto set_off_result = con.Query("SET normalize_dax_column_names = false");
+  REQUIRE(!set_off_result->HasError());
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, empty));
+
+  named_parameter_map_t override_on;
+  override_on["normalize_dax_column_names"] = Value::BOOLEAN(true);
+  REQUIRE(ResolveNormalizeDaxColumnNames(context, override_on));
+
+  named_parameter_map_t override_off;
+  override_off["normalize_dax_column_names"] = Value::BOOLEAN(false);
+  REQUIRE(!ResolveNormalizeDaxColumnNames(context, override_off));
 }
