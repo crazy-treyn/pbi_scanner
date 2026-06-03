@@ -30,6 +30,18 @@
 - Format/tidy targets bootstrap tools with `uv` from `pyproject.toml`; run commands from repo root.
 - macOS OpenSSL fallback when CMake cannot find it: `OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" make release`.
 
+## DuckDB-Wasm Build And Smoke
+
+- Build artifacts: `make wasm_eh` (primary) or `make wasm_mvp`; output under
+  `build/<platform>/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`.
+- Browser smoke test: `uv run test/wasm/run_pbi_wasm_smoke.py --build` (add
+  `--platform wasm_mvp` for the MVP artifact).
+- CI runs `.github/workflows/wasm-smoke.yml` on `wasm_eh` and `wasm_mvp` for
+  every push and pull request.
+- Browser auth is `access_token` only; see [docs/wasm.md](docs/wasm.md).
+- On Windows, prefer WSL/Linux or CI for Emscripten builds; native Windows uses
+  `scripts\dev-win.ps1` for release/unittest only.
+
 ## Native Windows Build Path
 
 - On native Windows, use the repo wrapper from PowerShell. Do not invoke bare `cmake` directly for normal builds; the wrapper supplies DuckDB extension config, vcpkg manifest mode, static OpenSSL, and cache compatibility checks.

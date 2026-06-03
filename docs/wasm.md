@@ -25,7 +25,11 @@ Run the credential-free browser WASM smoke test with:
 
 ```bash
 uv run test/wasm/run_pbi_wasm_smoke.py --build
+uv run test/wasm/run_pbi_wasm_smoke.py --build --platform wasm_mvp
 ```
+
+GitHub Actions runs the same smoke for both `wasm_eh` and `wasm_mvp` via
+`.github/workflows/wasm-smoke.yml`.
 
 The smoke test starts a local CORS-enabled extension server, starts a local
 mock XMLA endpoint, loads `pbi_scanner` in `@duckdb/duckdb-wasm`, verifies the
@@ -116,10 +120,19 @@ Connection-string parsing allows:
 Remote `http://` XMLA URLs are rejected (they do not match the `powerbi://`
 locator pattern either).
 
+## DuckDB-Wasm Workers And Cancellation
+
+Run DuckDB-Wasm in a dedicated Web Worker when possible. The WASM HTTP client
+registers the active `XMLHttpRequest` and `HttpClient::Stop()` calls `abort()`,
+but in-flight cancellation is still limited on the single-threaded sync path
+while a request is blocked.
+
 ## Current Limitations
 
 - `wasm_mvp` and `wasm_eh` use a synchronous pull execution path rather than the
   native background producer thread.
+- `powerbi://` locators fail at bind time in the browser; use direct XMLA URLs or
+  a host-provided proxy for Power BI REST resolution.
 - The first WASM HTTP implementation buffers each HTTP response before invoking
   the existing `PostStream` receiver.
 - Persistent metadata cache files are disabled in WASM; in-memory cache remains

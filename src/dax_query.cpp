@@ -552,6 +552,12 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   }
 
   auto config = ParsePowerBIConnectionString(connection_string);
+  if (PbiIsBrowserPlatform() && !config.is_direct_xmla) {
+    throw InvalidInputException(
+        "powerbi:// locators are not supported directly in DuckDB-Wasm because "
+        "Power BI REST calls require CORS or a backend proxy; use a direct "
+        "https:// or loopback http:// XMLA connection string instead");
+  }
   auto trimmed_dax = dax_text;
   StringUtil::Trim(trimmed_dax);
   if (trimmed_dax.empty()) {
