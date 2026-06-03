@@ -66,7 +66,7 @@ extension:
   build: cmake
   license: MIT
   version: X.Y.Z
-  excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"
+  excluded_platforms: "wasm_threads;windows_amd64_mingw;osx_amd64"
 repo:
   github: <owner>/pbi_scanner
   ref: <validated-release-commit-sha>

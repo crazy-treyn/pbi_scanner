@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "latest",
+    "apache-arrow": "latest",
+    "web-worker": "latest"
+  }
+}

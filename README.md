@@ -12,6 +12,7 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 - DuckDB secret integration via `TYPE azure` secrets (`credential_chain` / `service_principal`)
 - Power BI locator support (`powerbi://...`) plus direct XMLA fast path (`https://.../xmla?...`)
 - Local metadata cache for resolved targets/schemas (no token/secret persistence)
+- DuckDB-Wasm build support for `wasm_mvp` and `wasm_eh` (see [docs/wasm.md](docs/wasm.md))
 
 ## Quick Start
 
@@ -20,6 +21,13 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 - DuckDB extension toolchain requirements (CMake, C++ build toolchain, OpenSSL)
 - Git with submodule support
 - Azure CLI (`az`) installed
+
+For browser DuckDB-Wasm usage, use `auth_mode := 'access_token'` and pass a
+short-lived token from the host application. Native auth paths such as
+`azure_cli`, browser-side `service_principal`, and Azure credential-chain
+secrets are intentionally unsupported in browser WASM. See
+[docs/wasm.md](docs/wasm.md) for build, loading, CORS/proxy, and smoke-test
+details.
 
 ### Step 1: Clone and Build
 

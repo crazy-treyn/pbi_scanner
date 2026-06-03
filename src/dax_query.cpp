@@ -114,11 +114,14 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     } else {
       executor = make_uniq<XmlaExecutor>(bind_data.timeout_ms);
     }
+#ifndef __EMSCRIPTEN__
     worker = std::thread([this]() { RunWorker(); });
+#endif
   }
 
   ~DaxQueryGlobalState() override {
     stop_requested.store(true, std::memory_order_release);
+#ifndef __EMSCRIPTEN__
     condition.notify_all();
     if (executor && !finished) {
       executor->Stop();
@@ -126,11 +129,33 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     if (worker.joinable()) {
       worker.join();
     }
+#endif
   }
 
   idx_t MaxThreads() const override { return 1; }
 
   bool PopChunk(unique_ptr<DataChunk> &chunk, ClientContext &context) {
+#ifdef __EMSCRIPTEN__
+    if (context.IsInterrupted()) {
+      stop_requested.store(true, std::memory_order_release);
+      if (executor) {
+        executor->Stop();
+      }
+      throw InterruptException();
+    }
+    if (!finished && chunks.empty() && error.empty()) {
+      RunWorker();
+    }
+    if (!error.empty()) {
+      throw IOException("%s", error);
+    }
+    if (chunks.empty()) {
+      return false;
+    }
+    chunk = std::move(chunks.front());
+    chunks.pop_front();
+    return true;
+#else
     std::unique_lock<std::mutex> guard(lock);
     condition.wait(guard, [&]() {
       return stop_requested.load(std::memory_order_acquire) ||
@@ -155,6 +180,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     guard.unlock();
     condition.notify_all();
     return true;
+#endif
   }
 
   std::vector<XmlaColumn> columns;
@@ -167,7 +193,9 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   std::mutex lock;
   std::condition_variable condition;
   std::deque<unique_ptr<DataChunk>> chunks;
+#ifndef __EMSCRIPTEN__
   std::thread worker;
+#endif
   string error;
   bool finished = false;
   std::atomic<bool> stop_requested{false};
@@ -190,6 +218,13 @@ private:
       return true;
     }
 
+#ifdef __EMSCRIPTEN__
+    if (stop_requested.load(std::memory_order_acquire)) {
+      return false;
+    }
+    chunks.push_back(std::move(chunk));
+    return true;
+#else
     std::unique_lock<std::mutex> guard(lock);
     condition.wait(guard, [&]() {
       return stop_requested.load(std::memory_order_acquire) ||
@@ -202,6 +237,7 @@ private:
     guard.unlock();
     condition.notify_all();
     return true;
+#endif
   }
 
   void RunWorker() {
@@ -343,7 +379,9 @@ private:
       std::lock_guard<std::mutex> guard(lock);
       finished = true;
     }
+#ifndef __EMSCRIPTEN__
     condition.notify_all();
+#endif
   }
 };
 

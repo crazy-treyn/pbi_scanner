@@ -125,9 +125,10 @@ PowerBIConnectionConfig ParsePowerBIConnectionString(const std::string &raw) {
     throw InvalidInputException("Initial Catalog is required");
   }
 
-  if (StringUtil::StartsWith(StringUtil::Lower(result.data_source),
-                             "https://") &&
-      result.data_source.find("/xmla?") != std::string::npos) {
+  auto lower_data_source = StringUtil::Lower(result.data_source);
+  if ((StringUtil::StartsWith(lower_data_source, "https://") ||
+       StringUtil::StartsWith(lower_data_source, "http://")) &&
+      result.data_source.find("/xmla") != std::string::npos) {
     result.is_direct_xmla = true;
   } else {
     result.endpoint = ParsePowerBIEndpoint(result.data_source);

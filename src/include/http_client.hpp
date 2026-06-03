@@ -2,19 +2,25 @@
 
 #include "duckdb/common/types.hpp"
 
+#ifndef __EMSCRIPTEN__
 #include "httplib.hpp"
+#endif
 
 #include <functional>
 #include <memory>
+#ifndef __EMSCRIPTEN__
 #include <mutex>
+#endif
 #include <string>
 #include <utility>
 #include <vector>
 
+#ifndef __EMSCRIPTEN__
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 namespace pbi_httplib = duckdb_httplib_openssl;
 #else
 namespace pbi_httplib = duckdb_httplib;
+#endif
 #endif
 
 namespace duckdb {
@@ -57,14 +63,18 @@ public:
   void Stop();
 
 private:
+#ifndef __EMSCRIPTEN__
   pbi_httplib::Client &PrepareClient(const std::string &url,
                                      std::string &path_out);
+#endif
   void ClearClient();
 
   int64_t timeout_ms;
+#ifndef __EMSCRIPTEN__
   std::mutex mutex;
   std::unique_ptr<pbi_httplib::Client> active_client;
   std::string active_proto_host_port;
+#endif
 };
 
 } // namespace duckdb

@@ -279,6 +279,11 @@ static string ResolveAzureCliMode() {
 }
 
 static string ResolveAzureCliModeUncached() {
+#ifdef __EMSCRIPTEN__
+  throw InvalidInputException(
+      "azure_cli auth is not supported in DuckDB-Wasm; pass access_token "
+      "explicitly or route token acquisition through the host application");
+#else
 #ifdef _WIN32
   static constexpr const char *stderr_redirection = " 2>NUL";
 #else
@@ -304,6 +309,7 @@ static string ResolveAzureCliModeUncached() {
                       "the Power BI scope first");
   }
   return token;
+#endif
 }
 
 static ServicePrincipalCredentials
@@ -411,6 +417,12 @@ static string AcquireServicePrincipalTokenUncached(
 
 static string
 ResolveServicePrincipalMode(const named_parameter_map_t &named_parameters) {
+#ifdef __EMSCRIPTEN__
+  (void)named_parameters;
+  throw InvalidInputException(
+      "service_principal auth is not supported in browser DuckDB-Wasm; pass "
+      "access_token explicitly or use a backend/proxy to acquire tokens");
+#else
   auto credentials = ResolveServicePrincipalCredentials(named_parameters, true);
   if (!credentials.IsComplete()) {
     throw InvalidInputException(
@@ -418,6 +430,7 @@ ResolveServicePrincipalMode(const named_parameter_map_t &named_parameters) {
         "client_secret or standard Azure environment variables");
   }
   return AcquireServicePrincipalToken(credentials);
+#endif
 }
 
 static string ResolveSessionAuthMode(ClientContext &context) {
@@ -509,6 +522,13 @@ static vector<string> ParseChain(const string &chain) {
 
 static string ResolveCredentialChainSecret(const KeyValueSecret &secret,
                                            const string &secret_name) {
+#ifdef __EMSCRIPTEN__
+  (void)secret;
+  throw InvalidInputException(
+      "Azure credential_chain secret \"%s\" is not supported in "
+      "DuckDB-Wasm; pass access_token explicitly",
+      secret_name);
+#else
   auto chain = ParseChain(GetOptionalSecretValue(secret, "chain"));
   vector<string> failures;
   vector<string> unsupported;
@@ -549,10 +569,18 @@ static string ResolveCredentialChainSecret(const KeyValueSecret &secret,
     message += "; attempts failed: " + StringUtil::Join(failures, " | ");
   }
   throw IOException("%s", message);
+#endif
 }
 
 static string ResolveServicePrincipalSecret(const KeyValueSecret &secret,
                                             const string &secret_name) {
+#ifdef __EMSCRIPTEN__
+  (void)secret;
+  throw InvalidInputException(
+      "Azure service_principal secret \"%s\" is not supported in browser "
+      "DuckDB-Wasm; pass access_token explicitly or use a backend/proxy",
+      secret_name);
+#else
   ServicePrincipalCredentials credentials;
   credentials.tenant_id = GetOptionalSecretValue(secret, "tenant_id");
   credentials.client_id = GetOptionalSecretValue(secret, "client_id");
@@ -571,6 +599,7 @@ static string ResolveServicePrincipalSecret(const KeyValueSecret &secret,
         secret_name);
   }
   return AcquireServicePrincipalToken(credentials);
+#endif
 }
 
 static string ResolveSecretBackedAccessToken(ClientContext &context,

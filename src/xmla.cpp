@@ -3437,10 +3437,14 @@ void XmlaExecutor::ExecuteStreaming(
                                EnableSsasFastRowParser() && known_columns &&
                                (transport_mode == XmlaTransportMode::SX ||
                                 transport_mode == XmlaTransportMode::SX_XPRESS);
+#ifdef __EMSCRIPTEN__
+  streaming_sx_response = false;
+#endif
   auto buffer_response =
       transport_mode != XmlaTransportMode::PLAIN && !streaming_sx_response;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row, known_columns);
+#ifndef __EMSCRIPTEN__
   unique_ptr<SsasFastRowParser> streaming_parser;
   std::mutex stream_lock;
   std::condition_variable stream_cv;
@@ -3508,12 +3512,14 @@ void XmlaExecutor::ExecuteStreaming(
     stream_cv.notify_all();
     return true;
   };
+#endif
   auto response = http->PostStream(
       request.url, XmlaHeaders(request, transport_mode), envelope, "text/xml",
       [&](const_data_ptr_t data, idx_t data_length) {
         if (should_stop && should_stop()) {
           return false;
         }
+#ifndef __EMSCRIPTEN__
         if (streaming_sx_response) {
           if (transport_mode == XmlaTransportMode::SX_XPRESS) {
             return xpress_stream.Feed(data, data_length,
@@ -3526,6 +3532,7 @@ void XmlaExecutor::ExecuteStreaming(
           }
           return push_stream_block(data, data_length);
         }
+#endif
         if (buffer_response) {
           buffered_response.append(reinterpret_cast<const char *>(data),
                                    data_length);
@@ -3535,6 +3542,7 @@ void XmlaExecutor::ExecuteStreaming(
       },
       true);
   bool decoded_response = streaming_sx_response;
+#ifndef __EMSCRIPTEN__
   if (streaming_sx_response) {
     if (!(should_stop && should_stop()) && !response.HasRequestError() &&
         transport_mode == XmlaTransportMode::SX_XPRESS) {
@@ -3566,6 +3574,7 @@ void XmlaExecutor::ExecuteStreaming(
           static_cast<unsigned long long>(xpress_stream.BufferedBytes()));
     }
   }
+#endif
   if (buffer_response && !(should_stop && should_stop())) {
     try {
       decoded_response = DecodeBufferedXmlaResponse(
