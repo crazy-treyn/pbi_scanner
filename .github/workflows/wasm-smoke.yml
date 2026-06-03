@@ -1,0 +1,49 @@
+name: WASM Smoke Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: wasm-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wasm-smoke:
+    name: smoke (${{ matrix.duckdb_platform }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        duckdb_platform: [wasm_eh, wasm_mvp]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: test/wasm/package-lock.json
+
+      - name: Setup Emscripten
+        uses: mymind146/setup-emsdk@v14
+        with:
+          version: 3.1.64
+
+      - name: Build WASM extension
+        run: make ${{ matrix.duckdb_platform }}
+
+      - name: Install WASM smoke dependencies
+        run: npm ci
+        working-directory: test/wasm
+
+      - name: Run WASM smoke test
+        env:
+          PBI_WASM_EXTENSION_PATH: build/${{ matrix.duckdb_platform }}/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm
+        run: node smoke.mjs
+        working-directory: test/wasm

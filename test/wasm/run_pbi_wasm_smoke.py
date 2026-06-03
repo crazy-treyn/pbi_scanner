@@ -7,7 +7,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WASM_TEST_DIR = REPO_ROOT / "test" / "wasm"
-DEFAULT_EXTENSION = REPO_ROOT / "build" / "wasm_eh" / "extension" / "pbi_scanner" / "pbi_scanner.duckdb_extension.wasm"
+def default_extension(platform: str) -> Path:
+    return (
+        REPO_ROOT
+        / "build"
+        / platform
+        / "extension"
+        / "pbi_scanner"
+        / "pbi_scanner.duckdb_extension.wasm"
+    )
 
 
 def run(command, cwd=REPO_ROOT, env=None):
@@ -18,28 +26,37 @@ def run(command, cwd=REPO_ROOT, env=None):
 def main():
     parser = argparse.ArgumentParser(description="Run the pbi_scanner DuckDB-Wasm smoke test")
     parser.add_argument(
-        "--build", action="store_true", help="build the wasm_eh extension before running the smoke test"
+        "--build",
+        action="store_true",
+        help="build the selected DuckDB WASM platform before running the smoke test",
+    )
+    parser.add_argument(
+        "--platform",
+        choices=["wasm_eh", "wasm_mvp"],
+        default="wasm_eh",
+        help="DuckDB WASM platform directory under build/",
     )
     parser.add_argument(
         "--extension",
         type=Path,
-        default=DEFAULT_EXTENSION,
+        default=None,
         help="path to pbi_scanner.duckdb_extension.wasm",
     )
     args = parser.parse_args()
 
     if args.build:
-        run(["make", "wasm_eh"])
+        run(["make", args.platform])
 
-    extension = args.extension.resolve()
+    extension = (args.extension or default_extension(args.platform)).resolve()
+
     if not extension.exists():
         raise SystemExit(
             f"Missing WASM extension artifact: {extension}\n"
-            "Run this command again with --build, or build it with `make wasm_eh` first."
+            f"Run this command again with --build, or build it with `make {args.platform}` first."
         )
 
     if not (WASM_TEST_DIR / "node_modules").exists():
-        run(["npm", "install"], cwd=WASM_TEST_DIR)
+        run(["npm", "ci"], cwd=WASM_TEST_DIR)
 
     env = os.environ.copy()
     env["PBI_WASM_EXTENSION_PATH"] = str(extension)
