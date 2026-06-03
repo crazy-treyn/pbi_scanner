@@ -1,4 +1,5 @@
 #include "xmla.hpp"
+#include "pbi_platform.hpp"
 #include "pbi_scanner_util.hpp"
 #include "xmla_transport.hpp"
 #include "xmla_util.hpp"
@@ -3433,18 +3434,16 @@ void XmlaExecutor::ExecuteStreaming(
   auto envelope = BuildXmlaExecuteEnvelope(request.catalog, request.statement,
                                            request.effective_user_name);
   auto transport_mode = ResolveXmlaTransportMode();
-  auto streaming_sx_response = EnableStreamingSxParser() &&
+  auto streaming_sx_response = PbiSupportsSxStreamingExecution() &&
+                               EnableStreamingSxParser() &&
                                EnableSsasFastRowParser() && known_columns &&
                                (transport_mode == XmlaTransportMode::SX ||
                                 transport_mode == XmlaTransportMode::SX_XPRESS);
-#ifdef __EMSCRIPTEN__
-  streaming_sx_response = false;
-#endif
   auto buffer_response =
       transport_mode != XmlaTransportMode::PLAIN && !streaming_sx_response;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row, known_columns);
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   unique_ptr<SsasFastRowParser> streaming_parser;
   std::mutex stream_lock;
   std::condition_variable stream_cv;
@@ -3519,7 +3518,7 @@ void XmlaExecutor::ExecuteStreaming(
         if (should_stop && should_stop()) {
           return false;
         }
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
         if (streaming_sx_response) {
           if (transport_mode == XmlaTransportMode::SX_XPRESS) {
             return xpress_stream.Feed(data, data_length,
@@ -3542,7 +3541,7 @@ void XmlaExecutor::ExecuteStreaming(
       },
       true);
   bool decoded_response = streaming_sx_response;
-#ifndef __EMSCRIPTEN__
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   if (streaming_sx_response) {
     if (!(should_stop && should_stop()) && !response.HasRequestError() &&
         transport_mode == XmlaTransportMode::SX_XPRESS) {
