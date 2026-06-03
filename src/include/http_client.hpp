@@ -13,6 +13,7 @@ namespace pbi_httplib = duckdb_httplib;
 #endif
 #endif
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -69,6 +70,7 @@ private:
   void ClearClient();
 
   int64_t timeout_ms;
+  std::atomic<bool> stop_requested{false};
 };
 
 } // namespace duckdb

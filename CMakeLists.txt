@@ -50,6 +50,7 @@ set(EXTENSION_SOURCES
     src/xmla.cpp
 )
 
+list(APPEND EXTENSION_SOURCES src/http_client_common.cpp)
 if(EMSCRIPTEN)
   list(APPEND EXTENSION_SOURCES src/http_client_wasm.cpp)
 else()
