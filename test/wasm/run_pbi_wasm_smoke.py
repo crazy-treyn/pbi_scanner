@@ -60,6 +60,7 @@ def main():
 
     env = os.environ.copy()
     env["PBI_WASM_EXTENSION_PATH"] = str(extension)
+    env["PBI_WASM_DUCKDB_PLATFORM"] = args.platform
     run(["npm", "run", "smoke"], cwd=WASM_TEST_DIR, env=env)
 
 

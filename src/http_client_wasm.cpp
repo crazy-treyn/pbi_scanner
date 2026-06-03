@@ -25,6 +25,24 @@ struct WasmHttpResult {
 	uint32_t error_len;
 };
 
+static void AbortWasmHttpClient(uintptr_t client_id) {
+	EM_ASM({
+		var clientId = $0;
+		if (!Module.pbi_xhr_by_client) {
+			return;
+		}
+		var xhr = Module.pbi_xhr_by_client[clientId];
+		if (xhr) {
+			try {
+				xhr.abort();
+			} catch (e) {
+			}
+			delete Module.pbi_xhr_by_client[clientId];
+		}
+	},
+	    client_id);
+}
+
 static string HeaderLines(const HttpHeaders &headers, const string &content_type) {
 	string result;
 	bool has_content_type = false;
@@ -97,6 +115,7 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 	client.stop_requested.store(false, std::memory_order_release);
 	auto header_lines = HeaderLines(headers, content_type);
 	auto stop_flag_ptr = reinterpret_cast<uintptr_t>(&client.stop_requested);
+	auto client_id = reinterpret_cast<uintptr_t>(&client);
 	auto *result = reinterpret_cast<WasmHttpResult *>(EM_ASM_PTR(
 	    {
 		    var method = UTF8ToString($0);
@@ -106,6 +125,7 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 		    var bodyLen = $4;
 		    var timeoutMs = $5;
 		    var stopPtr = $6;
+		    var clientId = $7;
 
 		    function isStopped() {
 			    return HEAPU8[stopPtr] !== 0;
@@ -136,6 +156,12 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 			    HEAPU32[(out >> 2) + 6] = errorHeap[1];
 		    }
 
+		    function clearClientXhr() {
+			    if (Module.pbi_xhr_by_client) {
+				    delete Module.pbi_xhr_by_client[clientId];
+			    }
+		    }
+
 		    var out = _malloc(7 * 4);
 		    HEAPU32[out >> 2] = 0;
 		    HEAPU32[(out >> 2) + 1] = 0;
@@ -155,7 +181,8 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 			    }
 
 			    var xhr = new XMLHttpRequest();
-			    Module.pbi_active_xhr = xhr;
+			    Module.pbi_xhr_by_client = Module.pbi_xhr_by_client || {};
+			    Module.pbi_xhr_by_client[clientId] = xhr;
 			    xhr.open(method, url, false);
 			    xhr.responseType = "arraybuffer";
 			    if (timeoutMs > 0) {
@@ -176,7 +203,7 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 			    }
 			    if (isStopped()) {
 				    setError(out, "WASM browser HTTP request was cancelled");
-				    Module.pbi_active_xhr = null;
+				    clearClientXhr();
 				    return out;
 			    }
 			    if (bodyLen > 0) {
@@ -191,7 +218,7 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 				        ? "WASM browser HTTP request was cancelled"
 				        : "WASM browser HTTP request failed; check CORS headers or route through a proxy";
 				    setError(out, cancelMessage);
-				    Module.pbi_active_xhr = null;
+				    clearClientXhr();
 				    return out;
 			    }
 
@@ -217,12 +244,12 @@ static HttpResponse ExecuteWasmHttpRequest(HttpClient &client, const string &met
 			    }
 			    setError(out, message);
 		    } finally {
-			    Module.pbi_active_xhr = null;
+			    clearClientXhr();
 		    }
 		    return out;
 	    },
 	    method.c_str(), url.c_str(), header_lines.c_str(), body.data(), body.size(), timeout_ms,
-	    stop_flag_ptr));
+	    stop_flag_ptr, client_id));
 
 	HttpResponse response;
 	if (!result) {
@@ -248,15 +275,7 @@ HttpClient::~HttpClient() {
 
 void HttpClient::ClearClient() {
 	stop_requested.store(false, std::memory_order_release);
-	EM_ASM({
-		if (Module.pbi_active_xhr) {
-			try {
-				Module.pbi_active_xhr.abort();
-			} catch (e) {
-			}
-			Module.pbi_active_xhr = null;
-		}
-	});
+	AbortWasmHttpClient(reinterpret_cast<uintptr_t>(this));
 }
 
 HttpResponse HttpClient::Get(const string &url, const HttpHeaders &headers) {
@@ -299,14 +318,7 @@ HttpResponse HttpClient::PostStream(const string &url, const HttpHeaders &header
 
 void HttpClient::Stop() {
 	stop_requested.store(true, std::memory_order_release);
-	EM_ASM({
-		if (Module.pbi_active_xhr) {
-			try {
-				Module.pbi_active_xhr.abort();
-			} catch (e) {
-			}
-		}
-	});
+	AbortWasmHttpClient(reinterpret_cast<uintptr_t>(this));
 }
 
 } // namespace duckdb

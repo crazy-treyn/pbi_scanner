@@ -46,8 +46,29 @@ FROM dax_query(
 ```
 
 The test passes only if the query returns `probe_ok = 1`, the mock server sees
-the expected `Authorization` header, and unsupported browser auth such as
-`auth_mode := 'azure_cli'` fails with a clear error.
+the expected `Authorization` header, and unsupported browser paths fail with clear
+errors:
+
+- `auth_mode := 'azure_cli'`
+- `auth_mode := 'service_principal'` with explicit credentials
+- `powerbi://` locators at bind time
+
+Set `PBI_WASM_DUCKDB_PLATFORM` to `wasm_eh` or `wasm_mvp` when running smoke so
+the DuckDB-Wasm core matches the extension artifact (CI sets this from the matrix
+leg). When unset, smoke auto-selects a bundle via `selectBundle()`.
+
+## DuckDB-Wasm Version Alignment
+
+This extension is built against DuckDB **v1.5.2** (see `extension_config.cmake`).
+The smoke harness pins `@duckdb/duckdb-wasm` in `test/wasm/package.json`
+(currently **1.29.0**). Use a DuckDB-Wasm npm release whose embedded DuckDB
+version matches the extension you load; version skew can cause subtle ABI or
+runtime failures even when smoke queries pass.
+
+When publishing or integrating in a host app, record both:
+
+- the DuckDB engine version used to build `pbi_scanner.duckdb_extension.wasm`
+- the `@duckdb/duckdb-wasm` package version (or custom WASM build) in the browser
 
 ## Loading From DuckDB-Wasm
 
@@ -122,10 +143,10 @@ locator pattern either).
 
 ## DuckDB-Wasm Workers And Cancellation
 
-Run DuckDB-Wasm in a dedicated Web Worker when possible. The WASM HTTP client
-registers the active `XMLHttpRequest` and `HttpClient::Stop()` calls `abort()`,
-but in-flight cancellation is still limited on the single-threaded sync path
-while a request is blocked.
+Run DuckDB-Wasm in a dedicated Web Worker when possible. Each `HttpClient`
+registers its active `XMLHttpRequest` by client instance; `HttpClient::Stop()`
+calls `abort()` only for that client. In-flight cancellation is still limited on
+the single-threaded sync path while a request is blocked.
 
 ## Current Limitations
 
@@ -134,7 +155,9 @@ while a request is blocked.
 - `powerbi://` locators fail at bind time in the browser; use direct XMLA URLs or
   a host-provided proxy for Power BI REST resolution.
 - The first WASM HTTP implementation buffers each HTTP response before invoking
-  the existing `PostStream` receiver.
+  the existing `PostStream` receiver. Large XMLA payloads are held entirely in
+  WASM heap memory; prefer smaller queries or a backend proxy for very large
+  result sets until incremental streaming is available.
 - Persistent metadata cache files are disabled in WASM; in-memory cache remains
   available for the current DuckDB-Wasm session.
 - `wasm_threads` is not distributed yet.

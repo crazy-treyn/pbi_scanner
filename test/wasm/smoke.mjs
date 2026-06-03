@@ -100,9 +100,20 @@ async function startXmlaServer() {
   return { server, requests, url: `http://127.0.0.1:${port}/xmla` };
 }
 
+function resolveForcedBundleKey() {
+  const platform = process.env.PBI_WASM_DUCKDB_PLATFORM;
+  if (platform === "wasm_mvp") {
+    return "mvp";
+  }
+  if (platform === "wasm_eh") {
+    return "eh";
+  }
+  return null;
+}
+
 async function instantiateDuckDB() {
   const dist = dirname(require.resolve("@duckdb/duckdb-wasm"));
-  const bundle = await duckdb.selectBundle({
+  const bundles = {
     mvp: {
       mainModule: resolve(dist, "duckdb-mvp.wasm"),
       mainWorker: resolve(dist, "duckdb-node-mvp.worker.cjs"),
@@ -111,19 +122,39 @@ async function instantiateDuckDB() {
       mainModule: resolve(dist, "duckdb-eh.wasm"),
       mainWorker: resolve(dist, "duckdb-node-eh.worker.cjs"),
     },
-  });
+  };
+  const forcedKey = resolveForcedBundleKey();
+  const bundle = forcedKey ? bundles[forcedKey] : await duckdb.selectBundle(bundles);
+  if (!bundle) {
+    throw new Error(
+      `unable to resolve DuckDB-Wasm bundle${forcedKey ? ` for ${process.env.PBI_WASM_DUCKDB_PLATFORM}` : ""}`,
+    );
+  }
   const logger = new duckdb.ConsoleLogger();
   const worker = new Worker(bundle.mainWorker);
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   await db.open({ allowUnsignedExtensions: true });
-  return { db, worker };
+  return { db, worker, bundleKey: forcedKey ?? "auto" };
+}
+
+async function expectQueryError(conn, sql, expectedSubstring, label) {
+  try {
+    await conn.query(sql);
+  } catch (error) {
+    const message = String(error.message || error);
+    if (message.includes(expectedSubstring)) {
+      return;
+    }
+    throw new Error(`${label}: unexpected error message: ${message}`);
+  }
+  throw new Error(`${label}: expected query to fail`);
 }
 
 async function main() {
   const extensionServer = await startExtensionServer();
   const xmlaServer = await startXmlaServer();
-  const { db, worker } = await instantiateDuckDB();
+  const { db, worker, bundleKey } = await instantiateDuckDB();
   const conn = await db.connect();
 
   try {
@@ -161,24 +192,55 @@ async function main() {
       throw new Error("mock server did not observe expected Authorization header");
     }
 
-    let sawUnsupportedAuth = false;
-    try {
-      await conn.query(`
+    await expectQueryError(
+      conn,
+      `
         SELECT *
         FROM dax_query(
           'Data Source=${xmlaServer.url};Initial Catalog=mock;',
           'EVALUATE ROW("probe_ok", 1)',
           auth_mode := 'azure_cli'
         )
-      `);
-    } catch (error) {
-      sawUnsupportedAuth = String(error.message || error).includes("azure_cli auth is not supported");
-    }
-    if (!sawUnsupportedAuth) {
-      throw new Error("azure_cli WASM auth error was not observed");
-    }
+      `,
+      "azure_cli auth is not supported",
+      "azure_cli WASM auth rejection",
+    );
 
-    console.log("pbi_scanner WASM smoke test passed");
+    await expectQueryError(
+      conn,
+      `
+        SELECT *
+        FROM dax_query(
+          'Data Source=${xmlaServer.url};Initial Catalog=mock;',
+          'EVALUATE ROW("probe_ok", 1)',
+          auth_mode := 'service_principal',
+          tenant_id := 'tenant',
+          client_id := 'client',
+          client_secret := 'secret'
+        )
+      `,
+      "service_principal auth is not supported",
+      "service_principal WASM auth rejection",
+    );
+
+    await expectQueryError(
+      conn,
+      `
+        SELECT *
+        FROM dax_query(
+          'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example;',
+          'EVALUATE ROW("probe_ok", 1)',
+          auth_mode := 'access_token',
+          access_token := 'mock-token'
+        )
+      `,
+      "powerbi:// locators are not supported directly in DuckDB-Wasm",
+      "powerbi:// WASM bind rejection",
+    );
+
+    console.log(
+      `pbi_scanner WASM smoke test passed (duckdb bundle=${bundleKey}, platform=${process.env.PBI_WASM_DUCKDB_PLATFORM || "auto"})`,
+    );
   } finally {
     await conn.close();
     await db.terminate();
