@@ -31,7 +31,7 @@ jobs:
           cache-dependency-path: test/wasm/package-lock.json
 
       - name: Setup Emscripten
-        uses: mymind146/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v13
         with:
           version: 3.1.64
 

@@ -12,30 +12,30 @@ namespace duckdb {
 
 inline constexpr bool PbiIsBrowserPlatform() {
 #ifdef __EMSCRIPTEN__
-	return true;
+  return true;
 #else
-	return false;
+  return false;
 #endif
 }
 
 inline constexpr bool PbiSupportsNativeAuth() {
-	return !PbiIsBrowserPlatform();
+  return !PbiIsBrowserPlatform();
 }
 
 inline constexpr bool PbiSupportsFilesystemMetadataCache() {
-	return !PbiIsBrowserPlatform();
+  return !PbiIsBrowserPlatform();
 }
 
 inline constexpr bool PbiSupportsBackgroundThreads() {
-	return !PbiIsBrowserPlatform();
+  return !PbiIsBrowserPlatform();
 }
 
 inline constexpr bool PbiSupportsSxStreamingExecution() {
-	return !PbiIsBrowserPlatform();
+  return !PbiIsBrowserPlatform();
 }
 
 inline constexpr bool PbiUsesHttplibBackend() {
-	return !PbiIsBrowserPlatform();
+  return !PbiIsBrowserPlatform();
 }
 
 } // namespace duckdb

@@ -225,8 +225,8 @@ private:
     if (stop_requested.load(std::memory_order_acquire)) {
       return false;
     }
-    // Producer and consumer share this thread on WASM; backpressure is unnecessary
-    // and would silently truncate large result sets.
+    // Producer and consumer share this thread on WASM; backpressure is
+    // unnecessary and would silently truncate large result sets.
     chunks.push_back(std::move(chunk));
     return true;
 #else

@@ -59,6 +59,9 @@ public:
              bool disconnect_after_response = true);
   void Stop();
 
+  void PrepareHttpRequest();
+  uintptr_t StopFlagPtr();
+
 private:
 #if PBI_USES_HTTPLIB_BACKEND
   pbi_httplib::Client &PrepareClient(const std::string &url,
