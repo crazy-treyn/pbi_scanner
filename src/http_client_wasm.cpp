@@ -144,7 +144,10 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
           if (len) {
             stringToUTF8Array(text, HEAPU8, ptr, len + 1);
           }
-          return [ ptr, len ];
+          var pair = new Array(2);
+          pair[0] = ptr;
+          pair[1] = len;
+          return pair;
         }
 
         function copyBytesToHeap(bytes) {
@@ -153,7 +156,10 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
           if (len) {
             HEAPU8.set(bytes, ptr);
           }
-          return [ ptr, len ];
+          var pair = new Array(2);
+          pair[0] = ptr;
+          pair[1] = len;
+          return pair;
         }
 
         function setError(out, message) {
@@ -179,8 +185,7 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
 
         try {
           if (typeof XMLHttpRequest === "undefined") {
-            throw new Error(
-                "XMLHttpRequest is not available in this WASM runtime");
+            throw new Error("XMLHttpRequest is not available in this WASM runtime");
           }
           if (isStopped()) {
             setError(out, "WASM browser HTTP request was cancelled");
@@ -222,9 +227,8 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
 
           if (isStopped() || xhr.status === 0) {
             var cancelMessage = isStopped()
-                                    ? "WASM browser HTTP request was cancelled"
-                                    : "WASM browser HTTP request failed; check "
-                                      "CORS headers or route through a proxy";
+                ? "WASM browser HTTP request was cancelled"
+                : "WASM browser HTTP request failed; check CORS headers or route through a proxy";
             setError(out, cancelMessage);
             clearClientXhr();
             return out;
@@ -246,8 +250,7 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
           HEAPU32[(out >> 2) + 3] = headerHeap[0];
           HEAPU32[(out >> 2) + 4] = headerHeap[1];
         } catch (error) {
-          var message = "WASM browser HTTP request failed; check CORS headers "
-                        "or route through a proxy";
+          var message = "WASM browser HTTP request failed; check CORS headers or route through a proxy";
           if (error && error.message) {
             message += ": " + error.message;
           }

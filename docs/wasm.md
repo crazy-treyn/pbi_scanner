@@ -31,14 +31,15 @@ uv run test/wasm/run_pbi_wasm_smoke.py --build --platform wasm_mvp
 GitHub Actions runs the same smoke for both `wasm_eh` and `wasm_mvp` via
 `.github/workflows/wasm-smoke.yml`.
 
-The smoke test starts a local CORS-enabled extension server, starts a local
-mock XMLA endpoint, loads `pbi_scanner` in `@duckdb/duckdb-wasm`, verifies the
-SQL table functions are registered, and runs:
+The smoke test starts a local Playwright/Chromium browser, serves DuckDB-Wasm
+assets and the extension artifact from a local unsigned extension repository,
+serves a same-origin mock XMLA endpoint, loads `pbi_scanner` in
+`@duckdb/duckdb-wasm`, verifies the SQL table functions are registered, and runs:
 
 ```sql
 SELECT *
 FROM dax_query(
-    'Data Source=http://127.0.0.1:<mock_port>/xmla;Initial Catalog=mock;',
+    'Data Source=http://127.0.0.1:<smoke_port>/xmla;Initial Catalog=mock;',
     'EVALUATE ROW("probe_ok", 1)',
     auth_mode := 'access_token',
     access_token := 'mock-token'
@@ -55,15 +56,25 @@ errors:
 
 Set `PBI_WASM_DUCKDB_PLATFORM` to `wasm_eh` or `wasm_mvp` when running smoke so
 the DuckDB-Wasm core matches the extension artifact (CI sets this from the matrix
-leg). When unset, smoke auto-selects a bundle via `selectBundle()`.
+leg). When unset, smoke defaults to `wasm_eh`.
+
+The mock XMLA endpoint is intentionally same-origin with the browser page. The
+WASM HTTP client uses synchronous browser XHR; Chromium blocks synchronous
+cross-origin loopback XHR before the mock server receives a request, even with
+CORS headers. The smoke therefore validates the documented browser proxy shape:
+host applications should either call same-origin/loopback XMLA URLs or route
+cross-origin XMLA traffic through a backend/proxy with appropriate CORS policy.
 
 ## DuckDB-Wasm Version Alignment
 
 This extension is built against DuckDB **v1.5.2** (see `extension_config.cmake`).
 The smoke harness pins `@duckdb/duckdb-wasm` in `test/wasm/package.json`
-(currently **1.29.0**). Use a DuckDB-Wasm npm release whose embedded DuckDB
-version matches the extension you load; version skew can cause subtle ABI or
-runtime failures even when smoke queries pass.
+(currently **1.33.1-dev55.0**, which embeds DuckDB **v1.5.3**). Use a
+DuckDB-Wasm npm release whose embedded DuckDB version matches the extension you
+load; version skew can cause ABI or runtime failures. For example,
+`@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1`, and
+`@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`; neither is suitable for
+testing this `v1.5.2` extension.
 
 When publishing or integrating in a host app, record both:
 

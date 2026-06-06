@@ -1,6 +1,6 @@
 # WASM Testing Plan
 
-Plan to validate `feature/wasm-support` end-to-end: the extension builds, loads in DuckDB-Wasm in a real browser runtime, and runs a credential-free `dax_query` smoke against a mock XMLA server on CI and locally.
+Plan to validate `feature/wasm-support` end-to-end: the extension builds, loads in DuckDB-Wasm in a real browser runtime, and runs a credential-free `dax_query` smoke against a local mock XMLA endpoint on CI and locally.
 
 ## Goal
 
@@ -16,9 +16,26 @@ The feature branch is **mostly built out** but **not fully validated**:
 - The current smoke harness runs in **Node**, but the extension HTTP layer is designed for a **browser**
 - The Node harness has tooling/runtime mismatches (`@duckdb/duckdb-wasm`, workers, and XHR shims)
 
+### Local Checkpoint: 2026-06-06
+
+- `make wasm_eh` passes locally and produces `build/wasm_eh/repository/v1.5.2/wasm_eh/pbi_scanner.duckdb_extension.wasm`
+- `make wasm_mvp` fails locally during CMake configure with `Could NOT find Threads` under Homebrew Emscripten 5.0.7
+- The current Node smoke fails before extension validation because the worker bootstrap requires `xhr2`, which is not installed
+- The Node smoke also does not exit cleanly after that worker bootstrap failure
+
+### Browser Smoke Checkpoint: 2026-06-06
+
+- Replaced the Node DuckDB-Wasm runtime with a Playwright/Chromium browser smoke
+- `@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1` and cannot load the `v1.5.2` extension
+- `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3` and is still not compatible enough for this smoke
+- `@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3` and successfully loads the `wasm_eh` extension
+- Cross-origin synchronous XHR to a separate loopback XMLA server is blocked by Chromium before the mock server receives a request
+- Same-origin browser/proxy smoke passes for `wasm_eh`: `dax_query` returns `probe_ok = 1`, the mock endpoint sees `Authorization: Bearer mock-token`, and native-only auth/locator paths fail clearly
+- `wasm_mvp` end-to-end smoke remains unverified locally because the local `make wasm_mvp` build is blocked
+
 ## Guiding Principle
 
-Keep the validation small, but test the real runtime shape. Use Node only to start local servers and drive the test; run DuckDB-Wasm itself inside a browser page.
+Keep the validation small, but test the real runtime shape. Use Node only to start local servers and drive the test; run DuckDB-Wasm itself inside a browser page. Browser HTTP should be validated through a same-origin loopback/proxy path because Chromium blocks the extension's synchronous cross-origin XHR before a separate mock XMLA server receives the request.
 
 ## Plan
 
@@ -32,8 +49,7 @@ Push the fixes already on the branch (emsdk setup, formatting, HTTP stop-flag ac
 
 Move the smoke runtime into a real browser page, driven by Playwright or an equivalent browser runner:
 
-- Start a local CORS-enabled extension server
-- Start a local CORS-enabled mock XMLA endpoint
+- Start a local server for the page, DuckDB-Wasm assets, extension artifact, and same-origin mock XMLA endpoint
 - Open a browser page that instantiates `@duckdb/duckdb-wasm`
 - Select the DuckDB-Wasm bundle matching the extension platform under test (`wasm_eh` or `wasm_mvp`)
 - Run `INSTALL`, `LOAD pbi_scanner`, and the smoke SQL from inside the page
@@ -42,7 +58,7 @@ Move the smoke runtime into a real browser page, driven by Playwright or an equi
 
 ### 3. Validate The End-To-End Success Path
 
-Run the credential-free `dax_query` path against the mock XMLA endpoint:
+Run the credential-free `dax_query` path against the same-origin mock XMLA endpoint:
 
 - `dax_query` returns `probe_ok = 1`
 - The mock XMLA server receives `Authorization: Bearer mock-token`
@@ -63,12 +79,12 @@ Keep the negative coverage narrow and user-visible:
 ## Definition of Done
 
 - [ ] CI builds `wasm_eh` and `wasm_mvp` green on every push/PR
-- [ ] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_eh`
+- [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_eh`
 - [ ] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_mvp`
-- [ ] Browser smoke runs `dax_query` successfully against a mock XMLA server
-- [ ] Browser smoke verifies the access-token auth header reaches the mock XMLA server
-- [ ] Browser smoke verifies browser auth and locator restrictions
-- [ ] [docs/wasm.md](wasm.md) reflects the actual toolchain (Emscripten, Node, browser runner, and duckdb-wasm version)
+- [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_eh`
+- [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_eh`
+- [x] Browser smoke verifies browser auth and locator restrictions for `wasm_eh`
+- [x] [docs/wasm.md](wasm.md) reflects the actual toolchain (Emscripten, Node, browser runner, and duckdb-wasm version)
 
 ## Suggested Order of Work
 
