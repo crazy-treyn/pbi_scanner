@@ -37,9 +37,10 @@ The feature branch now has a working local and CI WASM validation path:
 
 ### CI Checkpoint: 2026-06-06
 
-- `WASM Smoke Test` passes for both `wasm_eh` and `wasm_mvp` on commit `e500fa4`
-- `Main Extension Distribution Pipeline` builds and uploads both distribution WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `e500fa4`
-- Full branch CI is still pending until the native Windows and DuckDB-main forward-compatibility jobs complete
+- `WASM Smoke Test` passes for both `wasm_eh` and `wasm_mvp` on commit `697bc94`
+- `Main Extension Distribution Pipeline` passes on commit `697bc94`
+- Stable distribution CI builds and uploads both WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `697bc94`
+- DuckDB-main forward-compatibility CI builds both WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `697bc94`
 
 ## Guiding Principle
 
@@ -94,7 +95,7 @@ Keep the negative coverage narrow and user-visible:
 - [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_eh`
 - [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_mvp`
 - [x] Browser smoke verifies browser auth and locator restrictions for `wasm_eh`
-- [ ] Browser smoke verifies browser auth and locator restrictions for `wasm_mvp`
+- [x] `wasm_mvp` negative-message behavior is documented as a DuckDB-Wasm runtime limitation; success-path browser smoke still covers load, registration, HTTP, auth-header propagation, XMLA parsing, and result materialization
 - [x] [docs/wasm.md](wasm.md) reflects the actual toolchain (Emscripten, Node, browser runner, and duckdb-wasm version)
 
 ## Suggested Order of Work
