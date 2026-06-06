@@ -8,20 +8,20 @@ Prove WASM support works end-to-end before merging the feature branch.
 
 ## Where Things Stand
 
-The feature branch is **mostly built out** but **not fully validated**:
+The feature branch now has a working local and CI WASM validation path:
 
 - WASM artifacts compile locally (`make wasm_eh` / `make wasm_mvp`)
 - Native offline tests pass (including platform capability hooks)
-- CI has **never completed** a full WASM smoke run (emsdk action typo; fix exists locally but is unpushed)
-- The current smoke harness runs in **Node**, but the extension HTTP layer is designed for a **browser**
-- The Node harness has tooling/runtime mismatches (`@duckdb/duckdb-wasm`, workers, and XHR shims)
+- Dedicated WASM smoke CI passes for `wasm_eh` and `wasm_mvp`
+- Distribution CI builds `wasm_eh` and `wasm_mvp` artifacts successfully
+- The smoke harness runs DuckDB-Wasm in Chromium through Playwright; Node only starts local servers and drives the browser
 
 ### Local Checkpoint: 2026-06-06
 
 - `make wasm_eh` passes locally and produces `build/wasm_eh/repository/v1.5.2/wasm_eh/pbi_scanner.duckdb_extension.wasm`
-- `make wasm_mvp` fails locally during CMake configure with `Could NOT find Threads` under Homebrew Emscripten 5.0.7
-- The current Node smoke fails before extension validation because the worker bootstrap requires `xhr2`, which is not installed
-- The Node smoke also does not exit cleanly after that worker bootstrap failure
+- `make wasm_mvp` passes locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
+- `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh` passes locally with negative checks enabled
+- `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_mvp` passes locally with success-path checks enabled and negative checks skipped
 
 ### Browser Smoke Checkpoint: 2026-06-06
 
@@ -34,6 +34,12 @@ The feature branch is **mostly built out** but **not fully validated**:
 - `wasm_mvp` builds locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
 - Same-origin browser/proxy smoke passes for `wasm_mvp`: `dax_query` returns `probe_ok = 1` and the mock endpoint sees `Authorization: Bearer mock-token`
 - `wasm_mvp` negative error-message checks are skipped because deliberate validation errors currently surface as DuckDB-Wasm MVP runtime glue errors (`_setThrew is not defined`) instead of the extension's `InvalidInputException` messages
+
+### CI Checkpoint: 2026-06-06
+
+- `WASM Smoke Test` passes for both `wasm_eh` and `wasm_mvp` on commit `e500fa4`
+- `Main Extension Distribution Pipeline` builds and uploads both distribution WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `e500fa4`
+- Full branch CI is still pending until the native Windows and DuckDB-main forward-compatibility jobs complete
 
 ## Guiding Principle
 
@@ -80,7 +86,7 @@ Keep the negative coverage narrow and user-visible:
 
 ## Definition of Done
 
-- [ ] CI builds `wasm_eh` and `wasm_mvp` green on every push/PR
+- [x] CI builds `wasm_eh` and `wasm_mvp` green on every push/PR
 - [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_eh`
 - [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_mvp`
 - [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_eh`
