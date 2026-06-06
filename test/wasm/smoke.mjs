@@ -160,53 +160,61 @@ async function startBrowserAssetServer() {
             throw new Error("unexpected dax_query result: " + JSON.stringify(rows));
           }
 
-          await expectQueryError(
-            conn,
-            \`
-              SELECT *
-              FROM dax_query(
-                'Data Source=\${config.xmlaUrl};Initial Catalog=mock;',
-                'EVALUATE ROW("probe_ok", 1)',
-                auth_mode := 'azure_cli'
-              )
-            \`,
-            "azure_cli auth is not supported",
-            "azure_cli WASM auth rejection",
-          );
+          let negativeChecks = "skipped";
+          if (config.bundleKey === "eh") {
+            await expectQueryError(
+              conn,
+              \`
+                SELECT *
+                FROM dax_query(
+                  'Data Source=\${config.xmlaUrl};Initial Catalog=mock;',
+                  'EVALUATE ROW("probe_ok", 1)',
+                  auth_mode := 'azure_cli'
+                )
+              \`,
+              "azure_cli auth is not supported",
+              "azure_cli WASM auth rejection",
+            );
 
-          await expectQueryError(
-            conn,
-            \`
-              SELECT *
-              FROM dax_query(
-                'Data Source=\${config.xmlaUrl};Initial Catalog=mock;',
-                'EVALUATE ROW("probe_ok", 1)',
-                auth_mode := 'service_principal',
-                tenant_id := 'tenant',
-                client_id := 'client',
-                client_secret := 'secret'
-              )
-            \`,
-            "service_principal auth is not supported",
-            "service_principal WASM auth rejection",
-          );
+            await expectQueryError(
+              conn,
+              \`
+                SELECT *
+                FROM dax_query(
+                  'Data Source=\${config.xmlaUrl};Initial Catalog=mock;',
+                  'EVALUATE ROW("probe_ok", 1)',
+                  auth_mode := 'service_principal',
+                  tenant_id := 'tenant',
+                  client_id := 'client',
+                  client_secret := 'secret'
+                )
+              \`,
+              "service_principal auth is not supported",
+              "service_principal WASM auth rejection",
+            );
 
-          await expectQueryError(
-            conn,
-            \`
-              SELECT *
-              FROM dax_query(
-                'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example;',
-                'EVALUATE ROW("probe_ok", 1)',
-                auth_mode := 'access_token',
-                access_token := 'mock-token'
-              )
-            \`,
-            "powerbi:// locators are not supported directly in DuckDB-Wasm",
-            "powerbi:// WASM bind rejection",
-          );
+            await expectQueryError(
+              conn,
+              \`
+                SELECT *
+                FROM dax_query(
+                  'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example;',
+                  'EVALUATE ROW("probe_ok", 1)',
+                  auth_mode := 'access_token',
+                  access_token := 'mock-token'
+                )
+              \`,
+              "powerbi:// locators are not supported directly in DuckDB-Wasm",
+              "powerbi:// WASM bind rejection",
+            );
+            negativeChecks = "passed";
+          }
 
-          return { rows: rows.map((row) => ({ probe_ok: Number(row.probe_ok) })), functions: names };
+          return {
+            rows: rows.map((row) => ({ probe_ok: Number(row.probe_ok) })),
+            functions: names,
+            negativeChecks,
+          };
         } finally {
           await conn.close();
           await db.terminate();
@@ -383,7 +391,7 @@ async function main() {
     console.log(
       `pbi_scanner WASM browser smoke test passed (duckdb bundle=${bundleKeyForPlatform()}, platform=${
         process.env.PBI_WASM_DUCKDB_PLATFORM || "wasm_eh"
-      }, rows=${JSON.stringify(smokeResult.rows)})`,
+      }, rows=${JSON.stringify(smokeResult.rows)}, negative_checks=${smokeResult.negativeChecks})`,
     );
   } finally {
     if (assetServer.extensionRequests.length) {

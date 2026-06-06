@@ -48,11 +48,17 @@ FROM dax_query(
 
 The test passes only if the query returns `probe_ok = 1`, the mock server sees
 the expected `Authorization` header, and unsupported browser paths fail with clear
-errors:
+errors on `wasm_eh`:
 
 - `auth_mode := 'azure_cli'`
 - `auth_mode := 'service_principal'` with explicit credentials
 - `powerbi://` locators at bind time
+
+The `wasm_mvp` smoke validates the same extension load, function registration,
+`dax_query`, XMLA parsing, and access-token header path, but skips the negative
+error-message assertions. In the current DuckDB-Wasm MVP runtime, deliberate
+validation errors surface as runtime glue errors instead of the extension's
+`InvalidInputException` messages.
 
 Set `PBI_WASM_DUCKDB_PLATFORM` to `wasm_eh` or `wasm_mvp` when running smoke so
 the DuckDB-Wasm core matches the extension artifact (CI sets this from the matrix

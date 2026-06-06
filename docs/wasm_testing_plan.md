@@ -31,7 +31,9 @@ The feature branch is **mostly built out** but **not fully validated**:
 - `@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3` and successfully loads the `wasm_eh` extension
 - Cross-origin synchronous XHR to a separate loopback XMLA server is blocked by Chromium before the mock server receives a request
 - Same-origin browser/proxy smoke passes for `wasm_eh`: `dax_query` returns `probe_ok = 1`, the mock endpoint sees `Authorization: Bearer mock-token`, and native-only auth/locator paths fail clearly
-- `wasm_mvp` end-to-end smoke remains unverified locally because the local `make wasm_mvp` build is blocked
+- `wasm_mvp` builds locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
+- Same-origin browser/proxy smoke passes for `wasm_mvp`: `dax_query` returns `probe_ok = 1` and the mock endpoint sees `Authorization: Bearer mock-token`
+- `wasm_mvp` negative error-message checks are skipped because deliberate validation errors currently surface as DuckDB-Wasm MVP runtime glue errors (`_setThrew is not defined`) instead of the extension's `InvalidInputException` messages
 
 ## Guiding Principle
 
@@ -80,10 +82,13 @@ Keep the negative coverage narrow and user-visible:
 
 - [ ] CI builds `wasm_eh` and `wasm_mvp` green on every push/PR
 - [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_eh`
-- [ ] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_mvp`
+- [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_mvp`
 - [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_eh`
+- [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_mvp`
 - [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_eh`
+- [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_mvp`
 - [x] Browser smoke verifies browser auth and locator restrictions for `wasm_eh`
+- [ ] Browser smoke verifies browser auth and locator restrictions for `wasm_mvp`
 - [x] [docs/wasm.md](wasm.md) reflects the actual toolchain (Emscripten, Node, browser runner, and duckdb-wasm version)
 
 ## Suggested Order of Work
