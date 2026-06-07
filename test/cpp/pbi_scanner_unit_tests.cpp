@@ -243,6 +243,8 @@ TEST_CASE("XML coercion type", "[xmla]") {
   REQUIRE(CoerceXmlTypeString("9223372036854775807", "BIGINT") == "BIGINT");
   REQUIRE(CoerceXmlTypeString("1234.5678", "DOUBLE") == "DOUBLE");
   REQUIRE(CoerceXmlTypeString("true", "BOOLEAN") == "BOOLEAN");
+  REQUIRE(CoerceXmlTypeString("1f66ff01-d600-48d3-a967-28a87af540cf",
+                              "INFER") == "VARCHAR");
 }
 
 TEST_CASE("XML coercion text", "[xmla]") {
@@ -256,6 +258,7 @@ TEST_CASE("XML coercion text", "[xmla]") {
   REQUIRE(CoerceXmlTextString("0.9999999", "TIME") == "23:59:59.99136");
   REQUIRE(CoerceXmlTextString("45292.25", "TIMESTAMP") ==
           "2024-01-01 06:00:00");
+  REQUIRE(CoerceXmlTextString("not-a-timestamp", "INFER") == "not-a-timestamp");
 }
 
 TEST_CASE("Effective execution transport", "[xmla]") {

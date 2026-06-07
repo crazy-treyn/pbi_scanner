@@ -106,7 +106,88 @@ static bool HasTimezoneOffset(const std::string &value) {
   return false;
 }
 
+static bool IsDigit(char value) { return value >= '0' && value <= '9'; }
+
+static bool LooksLikeDateValue(const std::string &value) {
+  return value.size() == 10 && IsDigit(value[0]) && IsDigit(value[1]) &&
+         IsDigit(value[2]) && IsDigit(value[3]) && value[4] == '-' &&
+         IsDigit(value[5]) && IsDigit(value[6]) && value[7] == '-' &&
+         IsDigit(value[8]) && IsDigit(value[9]);
+}
+
+static bool LooksLikeTimeValue(const std::string &value) {
+  return value.size() >= 8 && IsDigit(value[0]) && IsDigit(value[1]) &&
+         value[2] == ':' && IsDigit(value[3]) && IsDigit(value[4]) &&
+         value[5] == ':' && IsDigit(value[6]) && IsDigit(value[7]);
+}
+
+static bool LooksLikeTimestampValue(const std::string &value) {
+  return value.size() >= 19 && LooksLikeDateValue(value.substr(0, 10)) &&
+         (value[10] == 'T' || value[10] == ' ') &&
+         LooksLikeTimeValue(value.substr(11));
+}
+
+static bool LooksLikeUnsignedIntegerValue(const std::string &value,
+                                          idx_t start) {
+  if (start >= value.size()) {
+    return false;
+  }
+  for (idx_t i = start; i < value.size(); i++) {
+    if (!IsDigit(value[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool LooksLikeSignedIntegerValue(const std::string &value) {
+  if (value.empty()) {
+    return false;
+  }
+  auto start = (value[0] == '-' || value[0] == '+') ? 1 : 0;
+  return LooksLikeUnsignedIntegerValue(value, start);
+}
+
+static bool LooksLikeDoubleValue(const std::string &value) {
+  if (value.empty()) {
+    return false;
+  }
+  bool digit_seen = false;
+  bool decimal_seen = false;
+  bool exponent_seen = false;
+  bool digit_after_exponent = true;
+  for (idx_t i = 0; i < value.size(); i++) {
+    auto ch = value[i];
+    if (IsDigit(ch)) {
+      digit_seen = true;
+      if (exponent_seen) {
+        digit_after_exponent = true;
+      }
+      continue;
+    }
+    if ((ch == '-' || ch == '+') &&
+        (i == 0 || value[i - 1] == 'e' || value[i - 1] == 'E')) {
+      continue;
+    }
+    if (ch == '.' && !decimal_seen && !exponent_seen) {
+      decimal_seen = true;
+      continue;
+    }
+    if ((ch == 'e' || ch == 'E') && !exponent_seen && digit_seen) {
+      exponent_seen = true;
+      digit_after_exponent = false;
+      continue;
+    }
+    return false;
+  }
+  return digit_seen && digit_after_exponent &&
+         (decimal_seen || exponent_seen || !LooksLikeSignedIntegerValue(value));
+}
+
 static bool TryParseDateValue(const std::string &value, Value &result) {
+  if (!LooksLikeDateValue(value)) {
+    return false;
+  }
   if (value.find('T') != std::string::npos ||
       value.find(' ') != std::string::npos) {
     return false;
@@ -122,6 +203,9 @@ static bool TryParseDateValue(const std::string &value, Value &result) {
 }
 
 static bool TryParseTimeValue(const std::string &value, Value &result) {
+  if (!LooksLikeTimeValue(value)) {
+    return false;
+  }
   if (value.find('T') != std::string::npos ||
       value.find(' ') != std::string::npos) {
     return false;
@@ -137,6 +221,9 @@ static bool TryParseTimeValue(const std::string &value, Value &result) {
 }
 
 static bool TryParseTimestampValue(const std::string &value, Value &result) {
+  if (!LooksLikeTimestampValue(value)) {
+    return false;
+  }
   try {
     auto has_offset = HasTimezoneOffset(value);
     auto timestamp = Timestamp::FromString(value, has_offset);
@@ -185,6 +272,9 @@ static bool TryDecodeSsasTemporalSerial(double serial_value, date_t &out_date,
 
 static bool TryParseTimeFromBaseDateTimestamp(const std::string &value,
                                               Value &result) {
+  if (!LooksLikeTimestampValue(value)) {
+    return false;
+  }
   if (HasTimezoneOffset(value)) {
     return false;
   }
@@ -222,25 +312,26 @@ static std::string NormalizeXmlType(const std::string &source_type) {
 }
 
 static Value InferUntypedXmlValue(const std::string &body) {
-  if (StringUtil::CIEquals(body.data(), body.size(), "true", 4)) {
+  if (StringUtil::CIEquals(body, "true")) {
     return Value::BOOLEAN(true);
   }
-  if (StringUtil::CIEquals(body.data(), body.size(), "false", 5)) {
+  if (StringUtil::CIEquals(body, "false")) {
     return Value::BOOLEAN(false);
   }
 
   int64_t signed_value;
-  if (TryParseInt64(body, signed_value)) {
+  if (LooksLikeSignedIntegerValue(body) && TryParseInt64(body, signed_value)) {
     return Value::BIGINT(signed_value);
   }
 
   uint64_t unsigned_value;
-  if (TryParseUInt64(body, unsigned_value)) {
+  if (LooksLikeUnsignedIntegerValue(body, 0) &&
+      TryParseUInt64(body, unsigned_value)) {
     return Value::UBIGINT(unsigned_value);
   }
 
   double double_value;
-  if (TryParseDouble(body, double_value)) {
+  if (LooksLikeDoubleValue(body) && TryParseDouble(body, double_value)) {
     return Value::DOUBLE(double_value);
   }
 
@@ -360,11 +451,11 @@ Value CoerceXmlValue(const std::string &raw_value,
     return Value(body);
   }
   if (coercion_kind == XmlaCoercionKind::BOOLEAN) {
-    if (StringUtil::CIEquals(body.data(), body.size(), "true", 4) ||
+    if (StringUtil::CIEquals(body, "true") ||
         (body.size() == 1 && body[0] == '1')) {
       return Value::BOOLEAN(true);
     }
-    if (StringUtil::CIEquals(body.data(), body.size(), "false", 5) ||
+    if (StringUtil::CIEquals(body, "false") ||
         (body.size() == 1 && body[0] == '0')) {
       return Value::BOOLEAN(false);
     }

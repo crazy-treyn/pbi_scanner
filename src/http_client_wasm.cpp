@@ -324,10 +324,8 @@ HttpResponse HttpClient::PostStream(
             .count();
     response.streamed_chunks = 1;
     response.streamed_bytes = response.body.size();
-    if (!receiver(const_data_ptr_cast(response.body.data()),
-                  response.body.size())) {
-      Stop();
-    }
+    (void)receiver(const_data_ptr_cast(response.body.data()),
+                   response.body.size());
   }
   response.stream_elapsed_ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(

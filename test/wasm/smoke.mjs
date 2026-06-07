@@ -63,6 +63,24 @@ function listen(server) {
   });
 }
 
+function patchDuckDbMvpWorker(source) {
+  if (!source.includes("_setThrew") || source.includes("function _setThrew(")) {
+    return source;
+  }
+  const marker = "Module._setTempRet0=_setTempRet0;";
+  const patch =
+    "var __pbiScannerThrew=0,__pbiScannerThrewValue=0;" +
+    "function _setThrew(threw,value){" +
+    "if(threw){if(!__pbiScannerThrew){__pbiScannerThrew=threw;__pbiScannerThrewValue=value;}}" +
+    "else{__pbiScannerThrew=0;__pbiScannerThrewValue=value;}" +
+    "}" +
+    "Module._setThrew=_setThrew;";
+  if (!source.includes(marker)) {
+    return patch + source;
+  }
+  return source.replace(marker, marker + patch);
+}
+
 async function startBrowserAssetServer() {
   const duckdbDist = dirname(require.resolve("@duckdb/duckdb-wasm"));
   const arrowDist = dirname(require.resolve("apache-arrow"));
@@ -274,6 +292,11 @@ async function startBrowserAssetServer() {
         return;
       }
       try {
+        if (url.pathname.endsWith("duckdb-browser-mvp.worker.js")) {
+          res.writeHead(200, corsHeaders({ "Content-Type": "text/javascript" }));
+          res.end(patchDuckDbMvpWorker(readFileSync(filePath, "utf8")));
+          return;
+        }
         res.writeHead(200, corsHeaders({ "Content-Type": contentType(filePath) }));
         res.end(readFileSync(filePath));
       } catch {
