@@ -71,6 +71,64 @@ CORS headers. The smoke therefore validates the documented browser proxy shape:
 host applications should either call same-origin/loopback XMLA URLs or route
 cross-origin XMLA traffic through a backend/proxy with appropriate CORS policy.
 
+## Optional Live Semantic Model Test
+
+For local development, `test/wasm/run_live_pbi_wasm.py` runs a real Power BI
+semantic model query through both native DuckDB and browser DuckDB-Wasm, then
+compares the full materialized result. This helper is intentionally not part of
+CI because it requires Azure/Power BI credentials and live tenant access.
+
+Configure the same env vars used by `query_semantic_model_minimal.py`:
+
+```bash
+export PBI_BENCH_CONNECTION_STRING='Data Source=powerbi://api.powerbi.com/v1.0/myorg/<workspace>;Initial Catalog=<semantic-model>;'
+export PBI_BENCH_DAX='EVALUATE <table-or-query>'
+```
+
+Then run:
+
+```bash
+uv run --group bench test/wasm/run_live_pbi_wasm.py --build
+uv run --group bench test/wasm/run_live_pbi_wasm.py --build --platform wasm_mvp
+```
+
+The helper:
+
+- resolves `powerbi://` to a direct XMLA URL with Azure CLI on the host
+- gets a Power BI access token from `PBI_WASM_ACCESS_TOKEN`,
+  `PBI_BENCH_ACCESS_TOKEN`, or Azure CLI
+- runs the full query natively through the local release extension
+- starts a localhost browser/proxy server for DuckDB-Wasm
+- loads the local unsigned WASM extension
+- runs the same DAX through browser DuckDB-Wasm
+- compares columns, row count, and every returned row
+
+If direct XMLA resolution through Power BI REST fails, provide the direct XMLA
+target explicitly:
+
+```bash
+export PBI_WASM_DIRECT_CONNECTION_STRING='Data Source=https://<cluster>/xmla?vs=...;Initial Catalog=<direct-catalog>;'
+```
+
+Alternatively, provide the target URL and catalog separately:
+
+```bash
+export PBI_WASM_TARGET_XMLA_URL='https://<cluster>/xmla?vs=...'
+export PBI_WASM_INITIAL_CATALOG='<direct-catalog>'
+```
+
+Expected success output:
+
+```text
+pbi_scanner live WASM semantic model comparison passed (platform=wasm_eh, rows=<n>)
+```
+
+This test requires both `make release` and the selected WASM artifact. Use
+`--build` to build the WASM artifact automatically; run `make release` first if
+the native baseline extension is missing. If the DAX query has nondeterministic
+row ordering, add an `ORDER BY` in the DAX query before relying on full row-by-row
+comparison.
+
 ## DuckDB-Wasm Version Alignment
 
 This extension is built against DuckDB **v1.5.2** (see `extension_config.cmake`).

@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "live:pbi": "node live_pbi.mjs",
     "smoke": "node smoke.mjs"
   },
   "dependencies": {
