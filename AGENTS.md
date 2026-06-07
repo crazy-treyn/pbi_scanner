@@ -5,7 +5,7 @@
 - This repo builds a DuckDB C++ extension named `pbi_scanner` for querying Power BI Semantic Models through DAX/XMLA.
 - Normal edit surface: `src/`, `src/include/`, `test/sql/`, `README.md`, `CMakeLists.txt`, and `extension_config.cmake`.
 - Treat `duckdb/` and `extension-ci-tools/` as pinned upstream/vendor trees; do not edit them unless the task explicitly requires it.
-- Current stable target is DuckDB `v1.5.2`; CI also has a forward-compatibility build against DuckDB `main`.
+- Current stable target is DuckDB `v1.5.3`; CI also has a forward-compatibility build against DuckDB `main`.
 
 ## Architecture Pointers
 
@@ -75,7 +75,7 @@
 
 - Extension version lives in `extension_config.cmake` as numeric semver; GitHub tags/releases use `v` prefix.
 - For DuckDB version bumps, update together: `duckdb/` submodule, `extension-ci-tools/` submodule/ref, CI workflow refs and `duckdb_version`/`ci_tools_version`, Python `duckdb` pin in `pyproject.toml`, `uv.lock`, and README claims.
-- CI stable build uses `.github/workflows/MainDistributionPipeline.yml` with DuckDB/CI tools `v1.5.2`; keep `duckdb-next-build` on `main` as an early warning job.
+- CI stable build uses `.github/workflows/MainDistributionPipeline.yml` with DuckDB/CI tools `v1.5.3`; keep `duckdb-next-build` on `main` as an early warning job.
 - Community publication is descriptor-only in `duckdb/community-extensions`; do not copy built binaries into this repo.
 - Community descriptor must use a pushed, validated commit SHA for `repo.ref`, not a dirty local state or unpushed branch.
 - Detailed release/community publication runbook: `docs/release_publication.md`.

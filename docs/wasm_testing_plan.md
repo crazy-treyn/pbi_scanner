@@ -18,7 +18,7 @@ The feature branch now has a working local and CI WASM validation path:
 
 ### Local Checkpoint: 2026-06-06
 
-- `make wasm_eh` passes locally and produces `build/wasm_eh/repository/v1.5.2/wasm_eh/pbi_scanner.duckdb_extension.wasm`
+- `make wasm_eh` passes locally and produces `build/wasm_eh/repository/v1.5.3/wasm_eh/pbi_scanner.duckdb_extension.wasm`
 - `make wasm_mvp` passes locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
 - `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh` passes locally with negative checks enabled
 - `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_mvp` passes locally with success-path checks enabled and negative checks skipped
@@ -26,7 +26,7 @@ The feature branch now has a working local and CI WASM validation path:
 ### Browser Smoke Checkpoint: 2026-06-06
 
 - Replaced the Node DuckDB-Wasm runtime with a Playwright/Chromium browser smoke
-- `@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1` and cannot load the `v1.5.2` extension
+- `@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1` and cannot load the `v1.5.3` extension
 - `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3` and is still not compatible enough for this smoke
 - `@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3` and successfully loads the `wasm_eh` extension
 - Cross-origin synchronous XHR to a separate loopback XMLA server is blocked by Chromium before the mock server receives a request

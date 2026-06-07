@@ -4,7 +4,7 @@
 
 - Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
 - For a stable/current bump, update `duckdb/` to the target DuckDB release tag and `extension-ci-tools/` to the matching release branch or commit.
-- Current verified stable target: DuckDB `v1.5.2` with CI tools `v1.5.2`.
+- Current verified stable target: DuckDB `v1.5.3` with CI tools `v1.5.3`.
 - Update `.github/workflows/MainDistributionPipeline.yml` stable build and code-quality jobs so the reusable workflow ref, `duckdb_version`, and `ci_tools_version` all match the new stable release.
 - If `pyproject.toml` pins Python `duckdb` for local helper/benchmark tooling, bump it to the same release and regenerate `uv.lock` with `uv lock`.
 - Update `README.md` when the supported/current DuckDB release changes or when community publication instructions change.
