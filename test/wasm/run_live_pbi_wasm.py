@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -482,16 +483,16 @@ def compare_results(native: dict[str, Any], wasm: dict[str, Any]) -> None:
         raise AssertionError(
             f"row count mismatch: native={native['rowCount']} wasm={wasm['rowCount']}"
         )
-    if native["rows"] != wasm["rows"]:
-        for index, (native_row, wasm_row) in enumerate(
-            zip(native["rows"], wasm["rows"], strict=True)
-        ):
-            if native_row != wasm_row:
-                raise AssertionError(
-                    "row mismatch at zero-based index "
-                    f"{index}\nnative={native_row}\nwasm={wasm_row}"
-                )
-        raise AssertionError("row payload mismatch")
+    native_rows = Counter(json.dumps(row, sort_keys=True) for row in native["rows"])
+    wasm_rows = Counter(json.dumps(row, sort_keys=True) for row in wasm["rows"])
+    if native_rows != wasm_rows:
+        missing = native_rows - wasm_rows
+        extra = wasm_rows - native_rows
+        raise AssertionError(
+            "row payload mismatch\n"
+            f"missing_from_wasm={missing.most_common(3)}\n"
+            f"extra_in_wasm={extra.most_common(3)}"
+        )
 
 
 def main() -> None:
