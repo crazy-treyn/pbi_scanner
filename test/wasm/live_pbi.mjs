@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
 
@@ -73,6 +73,11 @@ function normalizeValue(value) {
     return null;
   }
   if (typeof value === "bigint") {
+    const min = BigInt(Number.MIN_SAFE_INTEGER);
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    if (value >= min && value <= max) {
+      return Number(value);
+    }
     return value.toString();
   }
   if (value instanceof Date) {
@@ -97,6 +102,14 @@ function normalizeValue(value) {
   return value;
 }
 
+function redactAuth(value) {
+  if (!value) {
+    return "<none>";
+  }
+  const [scheme] = String(value).split(/\s+/, 1);
+  return `${scheme || "Authorization"} <redacted>`;
+}
+
 async function startLiveServer() {
   const duckdbDist = dirname(require.resolve("@duckdb/duckdb-wasm"));
   const arrowDist = dirname(require.resolve("apache-arrow"));
@@ -105,6 +118,9 @@ async function startLiveServer() {
   const artifact = readFileSync(extensionPath);
   const targetXmlaUrl = requiredEnv("PBI_WASM_TARGET_XMLA_URL");
   const accessToken = requiredEnv("PBI_WASM_ACCESS_TOKEN");
+  const xmlaAuthScheme = (process.env.PBI_WASM_XMLA_AUTH_SCHEME || "Bearer").trim() || "Bearer";
+  const xmlaServer = (process.env.PBI_WASM_XMLA_SERVER || "").trim();
+  const xmlaDatabase = (process.env.PBI_WASM_XMLA_DATABASE || "").trim();
   const extensionRequests = [];
   const xmlaRequests = [];
   const html = `<!doctype html>
@@ -199,12 +215,12 @@ async function startLiveServer() {
         xmlaRequests.push({
           method: req.method,
           url: req.url,
-          authorization: req.headers.authorization || "",
+          authorization: redactAuth(req.headers.authorization || ""),
           byteLength: Buffer.byteLength(body),
         });
         try {
           const headers = {
-            "Authorization": req.headers.authorization || `Bearer ${accessToken}`,
+            "Authorization": `${xmlaAuthScheme} ${accessToken}`,
             "Content-Type": req.headers["content-type"] || "text/xml",
           };
           for (const header of [
@@ -217,6 +233,17 @@ async function startLiveServer() {
             if (req.headers[header]) {
               headers[header] = req.headers[header];
             }
+          }
+          if (xmlaServer) {
+            headers["x-ms-xmlacaps-negotiation-flags"] =
+              req.headers["x-transport-caps-negotiation-flags"] || "1";
+            headers["x-ms-xmlaserver"] = xmlaServer;
+            headers["x-ms-xmladatabase"] = xmlaDatabase;
+            headers["x-ms-xmlaintendedusage"] = "0";
+            headers["x-ms-xmlatransientmodelmode"] = "0";
+            headers["x-ms-xmladedicatedconnection"] = "0";
+            headers["x-ms-xmlaapp-general-info"] =
+              "Host=Other,AadClient=MSAL,CacheUsed=1,ConStrId=1,sspropInitApp=pbi_scanner";
           }
           const upstream = await fetch(targetXmlaUrl, {
             method: req.method,
@@ -378,7 +405,20 @@ async function main() {
       },
     );
 
-    console.log(JSON.stringify({ ok: true, result }));
+    const payload = JSON.stringify({ ok: true, result });
+    if (process.env.PBI_WASM_RESULT_PATH) {
+      writeFileSync(process.env.PBI_WASM_RESULT_PATH, payload);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          resultPath: process.env.PBI_WASM_RESULT_PATH,
+          rowCount: result.rowCount,
+          columns: result.columns,
+        }),
+      );
+    } else {
+      console.log(payload);
+    }
   } finally {
     if (server.extensionRequests.length) {
       console.error(`extension requests: ${server.extensionRequests.join(", ")}`);

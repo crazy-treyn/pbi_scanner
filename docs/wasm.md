@@ -89,7 +89,6 @@ Then run:
 
 ```bash
 uv run --group bench test/wasm/run_live_pbi_wasm.py --build
-uv run --group bench test/wasm/run_live_pbi_wasm.py --build --platform wasm_mvp
 ```
 
 The helper:
@@ -128,6 +127,11 @@ This test requires both `make release` and the selected WASM artifact. Use
 the native baseline extension is missing. If the DAX query has nondeterministic
 row ordering, add an `ORDER BY` in the DAX query before relying on full row-by-row
 comparison.
+
+The live helper targets `wasm_eh` by default. `wasm_mvp` can be selected with
+`--platform wasm_mvp`, but large live queries may currently fail in
+DuckDB-Wasm's MVP runtime with `_setThrew is not defined`; use `wasm_eh` for the
+full live semantic-model proof.
 
 ## DuckDB-Wasm Version Alignment
 
