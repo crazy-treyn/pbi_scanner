@@ -4,7 +4,7 @@
 
 - Treat a DuckDB version bump as a coordinated change across submodules, CI, local helper tooling, docs, and validation evidence.
 - For a stable/current bump, update `duckdb/` to the target DuckDB release tag and `extension-ci-tools/` to the matching release branch or commit.
-- Current verified stable target: DuckDB `v1.5.2` with CI tools `v1.5.2`.
+- Current verified stable target: DuckDB `v1.5.3` with CI tools `v1.5.3`.
 - Update `.github/workflows/MainDistributionPipeline.yml` stable build and code-quality jobs so the reusable workflow ref, `duckdb_version`, and `ci_tools_version` all match the new stable release.
 - If `pyproject.toml` pins Python `duckdb` for local helper/benchmark tooling, bump it to the same release and regenerate `uv.lock` with `uv lock`.
 - Update `README.md` when the supported/current DuckDB release changes or when community publication instructions change.
@@ -28,6 +28,9 @@ make tidy-check
 - GitHub tags/releases use a `v` prefix, for example `v0.0.4`.
 - Keep the community descriptor `extension.version` aligned with `extension_config.cmake`.
 - The community descriptor `repo.ref` must point at the validated release commit SHA from this repo.
+- Before publishing, confirm `extension.excluded_platforms` in the community
+  descriptor matches this repo's CI `exclude_archs` and
+  `docs/release_publication.md` (including WASM platforms you intend to ship).
 
 Preferred local release sequence:
 
@@ -66,7 +69,7 @@ extension:
   build: cmake
   license: MIT
   version: X.Y.Z
-  excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;osx_amd64"
+  excluded_platforms: "wasm_threads;windows_amd64_mingw;osx_amd64"
 repo:
   github: <owner>/pbi_scanner
   ref: <validated-release-commit-sha>

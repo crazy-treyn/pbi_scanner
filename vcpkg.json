@@ -1,6 +1,9 @@
 {
   "dependencies": [
-    "openssl"
+    {
+      "name": "openssl",
+      "platform": "!emscripten"
+    }
   ],
   "vcpkg-configuration": {
     "overlay-ports": [

@@ -1,6 +1,7 @@
 #include "dax_query.hpp"
 
 #include "auth.hpp"
+#include "pbi_platform.hpp"
 #include "connection_string.hpp"
 #include "dax_column_names.hpp"
 #include "dax_probe.hpp"
@@ -114,23 +115,50 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     } else {
       executor = make_uniq<XmlaExecutor>(bind_data.timeout_ms);
     }
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     worker = std::thread([this]() { RunWorker(); });
+#endif
   }
 
   ~DaxQueryGlobalState() override {
     stop_requested.store(true, std::memory_order_release);
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     condition.notify_all();
+#endif
     if (executor && !finished) {
       executor->Stop();
     }
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     if (worker.joinable()) {
       worker.join();
     }
+#endif
   }
 
   idx_t MaxThreads() const override { return 1; }
 
   bool PopChunk(unique_ptr<DataChunk> &chunk, ClientContext &context) {
+#if !PBI_SUPPORTS_BACKGROUND_THREADS
+    if (context.IsInterrupted()) {
+      stop_requested.store(true, std::memory_order_release);
+      if (executor) {
+        executor->Stop();
+      }
+      throw InterruptException();
+    }
+    if (!finished && chunks.empty() && error.empty()) {
+      RunWorker();
+    }
+    if (!error.empty()) {
+      throw IOException("%s", error);
+    }
+    if (chunks.empty()) {
+      return false;
+    }
+    chunk = std::move(chunks.front());
+    chunks.pop_front();
+    return true;
+#else
     std::unique_lock<std::mutex> guard(lock);
     condition.wait(guard, [&]() {
       return stop_requested.load(std::memory_order_acquire) ||
@@ -155,6 +183,7 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
     guard.unlock();
     condition.notify_all();
     return true;
+#endif
   }
 
   std::vector<XmlaColumn> columns;
@@ -167,7 +196,9 @@ struct DaxQueryGlobalState : public GlobalTableFunctionState {
   std::mutex lock;
   std::condition_variable condition;
   std::deque<unique_ptr<DataChunk>> chunks;
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   std::thread worker;
+#endif
   string error;
   bool finished = false;
   std::atomic<bool> stop_requested{false};
@@ -190,6 +221,15 @@ private:
       return true;
     }
 
+#if !PBI_SUPPORTS_BACKGROUND_THREADS
+    if (stop_requested.load(std::memory_order_acquire)) {
+      return false;
+    }
+    // Producer and consumer share this thread on WASM; backpressure is
+    // unnecessary and would silently truncate large result sets.
+    chunks.push_back(std::move(chunk));
+    return true;
+#else
     std::unique_lock<std::mutex> guard(lock);
     condition.wait(guard, [&]() {
       return stop_requested.load(std::memory_order_acquire) ||
@@ -202,6 +242,7 @@ private:
     guard.unlock();
     condition.notify_all();
     return true;
+#endif
   }
 
   void RunWorker() {
@@ -343,7 +384,9 @@ private:
       std::lock_guard<std::mutex> guard(lock);
       finished = true;
     }
+#if PBI_SUPPORTS_BACKGROUND_THREADS
     condition.notify_all();
+#endif
   }
 };
 
@@ -508,6 +551,12 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   }
 
   auto config = ParsePowerBIConnectionString(connection_string);
+  if (PbiIsBrowserPlatform() && !config.is_direct_xmla) {
+    throw InvalidInputException(
+        "powerbi:// locators are not supported directly in DuckDB-Wasm because "
+        "Power BI REST calls require CORS or a backend proxy; use a direct "
+        "https:// or loopback http:// XMLA connection string instead");
+  }
   auto trimmed_dax = dax_text;
   StringUtil::Trim(trimmed_dax);
   if (trimmed_dax.empty()) {

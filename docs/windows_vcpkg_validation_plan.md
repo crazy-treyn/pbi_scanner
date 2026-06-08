@@ -63,7 +63,7 @@ Run these on a **Windows x64** machine (physical, VM, or CI job with MSVC). **Do
 **Goal:** The shipped `pbi_scanner.duckdb_extension` does not depend on `libssl*.dll` / `libcrypto*.dll` at load time.
 
 1. Push the branch and wait for **Main Extension Distribution Pipeline** to finish.
-2. Download the Windows extension artifact (name shape similar to `pbi_scanner-v1.5.2-extension-windows_amd64`).
+2. Download the Windows extension artifact (name shape similar to `pbi_scanner-v1.5.3-extension-windows_amd64`).
 3. From a **Developer Command Prompt for VS** (or any environment where `dumpbin` is on PATH):
    ```bat
    dumpbin /dependents path\to\pbi_scanner.duckdb_extension

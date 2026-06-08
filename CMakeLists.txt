@@ -7,26 +7,33 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 
-if(WIN32)
-  set(OPENSSL_USE_STATIC_LIBS TRUE)
+if(NOT EMSCRIPTEN)
+  if(WIN32)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+  endif()
+  find_package(OpenSSL REQUIRED)
+  find_package(ZLIB)
 endif()
-find_package(OpenSSL REQUIRED)
-find_package(ZLIB)
 
 include_directories(src/include)
-include_directories(duckdb/third_party/httplib)
 include_directories(duckdb/third_party/yyjson/include)
+if(NOT EMSCRIPTEN)
+  include_directories(duckdb/third_party/httplib)
+endif()
 
 function(target_link_pbi_scanner_deps target)
-  target_compile_definitions(${target} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-  target_link_libraries(${target} OpenSSL::SSL OpenSSL::Crypto)
-  if(ZLIB_FOUND)
-    target_compile_definitions(${target} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
-    target_link_libraries(${target} ZLIB::ZLIB)
+  if(NOT EMSCRIPTEN)
+    target_compile_definitions(${target} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${target} OpenSSL::SSL OpenSSL::Crypto)
+    if(ZLIB_FOUND)
+      target_compile_definitions(${target} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
+      target_link_libraries(${target} ZLIB::ZLIB)
+    endif()
   endif()
 endfunction()
 
 set(EXTENSION_SOURCES
+    src/pbi_platform.cpp
     src/pbi_scanner_extension.cpp
     src/dax_probe.cpp
     src/dax_column_names.cpp
@@ -35,7 +42,6 @@ set(EXTENSION_SOURCES
     src/vector_writer.cpp
     src/auth.cpp
     src/connection_string.cpp
-    src/http_client.cpp
     src/powerbi_resolver.cpp
     src/xmla_transport.cpp
     src/xmla_util.cpp
@@ -43,6 +49,13 @@ set(EXTENSION_SOURCES
     src/xpress.cpp
     src/xmla.cpp
 )
+
+list(APPEND EXTENSION_SOURCES src/http_client_common.cpp)
+if(EMSCRIPTEN)
+  list(APPEND EXTENSION_SOURCES src/http_client_wasm.cpp)
+else()
+  list(APPEND EXTENSION_SOURCES src/http_client.cpp)
+endif()
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

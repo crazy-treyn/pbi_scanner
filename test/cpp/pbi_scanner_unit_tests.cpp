@@ -2,6 +2,8 @@
 #include "catch.hpp"
 
 #include "auth.hpp"
+#include "connection_string.hpp"
+#include "pbi_platform.hpp"
 #include "dax_column_names.hpp"
 #include "dax_probe.hpp"
 #include "metadata_cache.hpp"
@@ -241,6 +243,8 @@ TEST_CASE("XML coercion type", "[xmla]") {
   REQUIRE(CoerceXmlTypeString("9223372036854775807", "BIGINT") == "BIGINT");
   REQUIRE(CoerceXmlTypeString("1234.5678", "DOUBLE") == "DOUBLE");
   REQUIRE(CoerceXmlTypeString("true", "BOOLEAN") == "BOOLEAN");
+  REQUIRE(CoerceXmlTypeString("1f66ff01-d600-48d3-a967-28a87af540cf",
+                              "INFER") == "VARCHAR");
 }
 
 TEST_CASE("XML coercion text", "[xmla]") {
@@ -254,6 +258,7 @@ TEST_CASE("XML coercion text", "[xmla]") {
   REQUIRE(CoerceXmlTextString("0.9999999", "TIME") == "23:59:59.99136");
   REQUIRE(CoerceXmlTextString("45292.25", "TIMESTAMP") ==
           "2024-01-01 06:00:00");
+  REQUIRE(CoerceXmlTextString("not-a-timestamp", "INFER") == "not-a-timestamp");
 }
 
 TEST_CASE("Effective execution transport", "[xmla]") {
@@ -288,6 +293,49 @@ TEST_CASE("DAX column name normalization", "[dax_column_names]") {
   REQUIRE(JoinPipeDelimited(FormatDaxColumnNamesForDuckDB(
               SplitPipeDelimited("[Amount]|[Amount]|[Amount]"), true)) ==
           "Amount|Amount_2|Amount_3");
+}
+
+TEST_CASE("Native platform capabilities", "[pbi_platform]") {
+  REQUIRE(PbiSupportsNativeAuth());
+  REQUIRE(PbiSupportsFilesystemMetadataCache());
+  REQUIRE(PbiSupportsBackgroundThreads());
+  REQUIRE(PbiSupportsSxStreamingExecution());
+  REQUIRE(!PbiIsBrowserPlatform());
+  REQUIRE_NOTHROW(RejectUnsupportedBrowserAuthForTesting(
+      "azure_cli auth is not supported in DuckDB-Wasm"));
+}
+
+TEST_CASE("Parse direct XMLA connection strings", "[connection_string]") {
+  auto https_direct = ParsePowerBIConnectionString(
+      "Data "
+      "Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;"
+      "Initial Catalog=example_db;");
+  REQUIRE(https_direct.is_direct_xmla);
+  REQUIRE(https_direct.data_source.find("https://") == 0);
+
+  auto loopback_http = ParsePowerBIConnectionString(
+      "Data Source=http://127.0.0.1:8123/xmla;Initial Catalog=mock;");
+  REQUIRE(loopback_http.is_direct_xmla);
+
+  auto loopback_localhost = ParsePowerBIConnectionString(
+      "Data Source=http://localhost/xmla;Initial Catalog=mock;");
+  REQUIRE(loopback_localhost.is_direct_xmla);
+
+  REQUIRE_THROWS_WITH(
+      ParsePowerBIConnectionString(
+          "Data Source=https://example.com/xmla;Initial Catalog=example_db;"),
+      Catch::Matchers::Contains("powerbi://"));
+
+  REQUIRE_THROWS_WITH(
+      ParsePowerBIConnectionString(
+          "Data Source=http://evil.example/xmla;Initial Catalog=mock;"),
+      Catch::Matchers::Contains("powerbi://"));
+
+  auto powerbi = ParsePowerBIConnectionString(
+      "Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;"
+      "Initial Catalog=example_semantic_model;");
+  REQUIRE(!powerbi.is_direct_xmla);
+  REQUIRE(powerbi.endpoint.workspace_name == "Example Workspace");
 }
 
 TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {

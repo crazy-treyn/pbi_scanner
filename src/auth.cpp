@@ -2,6 +2,7 @@
 
 #include "connection_string.hpp"
 #include "http_client.hpp"
+#include "pbi_platform.hpp"
 #include "pbi_scanner_util.hpp"
 
 #include "duckdb/catalog/catalog_transaction.hpp"
@@ -279,6 +280,9 @@ static string ResolveAzureCliMode() {
 }
 
 static string ResolveAzureCliModeUncached() {
+  RejectUnsupportedBrowserAuth(
+      "azure_cli auth is not supported in DuckDB-Wasm; pass access_token "
+      "explicitly or route token acquisition through the host application");
 #ifdef _WIN32
   static constexpr const char *stderr_redirection = " 2>NUL";
 #else
@@ -411,6 +415,9 @@ static string AcquireServicePrincipalTokenUncached(
 
 static string
 ResolveServicePrincipalMode(const named_parameter_map_t &named_parameters) {
+  RejectUnsupportedBrowserAuth(
+      "service_principal auth is not supported in browser DuckDB-Wasm; pass "
+      "access_token explicitly or use a backend/proxy to acquire tokens");
   auto credentials = ResolveServicePrincipalCredentials(named_parameters, true);
   if (!credentials.IsComplete()) {
     throw InvalidInputException(
@@ -509,6 +516,12 @@ static vector<string> ParseChain(const string &chain) {
 
 static string ResolveCredentialChainSecret(const KeyValueSecret &secret,
                                            const string &secret_name) {
+  if (!PbiSupportsNativeAuth()) {
+    throw InvalidInputException(
+        "Azure credential_chain secret \"%s\" is not supported in "
+        "DuckDB-Wasm; pass access_token explicitly",
+        secret_name.c_str());
+  }
   auto chain = ParseChain(GetOptionalSecretValue(secret, "chain"));
   vector<string> failures;
   vector<string> unsupported;
@@ -553,6 +566,12 @@ static string ResolveCredentialChainSecret(const KeyValueSecret &secret,
 
 static string ResolveServicePrincipalSecret(const KeyValueSecret &secret,
                                             const string &secret_name) {
+  if (!PbiSupportsNativeAuth()) {
+    throw InvalidInputException(
+        "Azure service_principal secret \"%s\" is not supported in browser "
+        "DuckDB-Wasm; pass access_token explicitly or use a backend/proxy",
+        secret_name.c_str());
+  }
   ServicePrincipalCredentials credentials;
   credentials.tenant_id = GetOptionalSecretValue(secret, "tenant_id");
   credentials.client_id = GetOptionalSecretValue(secret, "client_id");

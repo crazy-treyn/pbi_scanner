@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "live:pbi": "node live_pbi.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev55.0",
+    "apache-arrow": "17.0.0"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0"
+  }
+}

@@ -1,4 +1,5 @@
 #include "http_client.hpp"
+#include "http_client_common.hpp"
 #include "pbi_scanner_util.hpp"
 
 #include "duckdb/common/http_util.hpp"
@@ -118,15 +119,6 @@ static HttpResponse TransformStreamResult(pbi_httplib::Result &result) {
 }
 
 } // namespace
-
-std::string HttpResponse::GetHeader(const std::string &name) const {
-  for (const auto &header : headers) {
-    if (StringUtil::CIEquals(header.first, name)) {
-      return header.second;
-    }
-  }
-  return std::string();
-}
 
 HttpClient::HttpClient(int64_t timeout_ms_p)
     : timeout_ms(timeout_ms_p > 0 ? timeout_ms_p : 300000) {}
@@ -256,24 +248,7 @@ HttpResponse HttpClient::PostStream(
   response.streamed_chunks = received_chunks;
   response.first_byte_ms = first_byte_ms;
   response.stream_elapsed_ms = elapsed_ms;
-  if (DebugTimingsEnabled()) {
-    auto content_type = response.GetHeader("Content-Type");
-    auto content_encoding = response.GetHeader("Content-Encoding");
-    auto transfer_encoding = response.GetHeader("Transfer-Encoding");
-    auto negotiation_flags =
-        response.GetHeader("X-Transport-Caps-Negotiation-Flags");
-    std::fprintf(stderr,
-                 "[pbi_scanner] HTTP PostStream: %llu bytes in %llu chunks "
-                 "(first byte %lld ms, total %lld ms, content-type \"%s\", "
-                 "content-encoding \"%s\", transfer-encoding \"%s\", "
-                 "transport-flags \"%s\")\n",
-                 static_cast<unsigned long long>(received_bytes),
-                 static_cast<unsigned long long>(received_chunks),
-                 static_cast<long long>(first_byte_ms),
-                 static_cast<long long>(elapsed_ms), content_type.c_str(),
-                 content_encoding.c_str(), transfer_encoding.c_str(),
-                 negotiation_flags.c_str());
-  }
+  LogHttpPostStreamTimings(response, "HTTP");
   if (disconnect_after_response || response.HasRequestError() ||
       response.status >= 400) {
     ClearClient();
@@ -282,10 +257,13 @@ HttpResponse HttpClient::PostStream(
 }
 
 void HttpClient::Stop() {
+  stop_requested.store(true, std::memory_order_release);
+#if PBI_USES_HTTPLIB_BACKEND
   std::lock_guard<std::mutex> guard(mutex);
   if (active_client) {
     active_client->stop();
   }
+#endif
 }
 
 } // namespace duckdb

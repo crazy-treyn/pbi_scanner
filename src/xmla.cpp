@@ -1,4 +1,5 @@
 #include "xmla.hpp"
+#include "pbi_platform.hpp"
 #include "pbi_scanner_util.hpp"
 #include "xmla_transport.hpp"
 #include "xmla_util.hpp"
@@ -3433,7 +3434,8 @@ void XmlaExecutor::ExecuteStreaming(
   auto envelope = BuildXmlaExecuteEnvelope(request.catalog, request.statement,
                                            request.effective_user_name);
   auto transport_mode = ResolveXmlaTransportMode();
-  auto streaming_sx_response = EnableStreamingSxParser() &&
+  auto streaming_sx_response = PbiSupportsSxStreamingExecution() &&
+                               EnableStreamingSxParser() &&
                                EnableSsasFastRowParser() && known_columns &&
                                (transport_mode == XmlaTransportMode::SX ||
                                 transport_mode == XmlaTransportMode::SX_XPRESS);
@@ -3441,6 +3443,7 @@ void XmlaExecutor::ExecuteStreaming(
       transport_mode != XmlaTransportMode::PLAIN && !streaming_sx_response;
   std::string buffered_response;
   XmlaStreamParser parser(false, on_schema, on_row, known_columns);
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   unique_ptr<SsasFastRowParser> streaming_parser;
   std::mutex stream_lock;
   std::condition_variable stream_cv;
@@ -3508,12 +3511,14 @@ void XmlaExecutor::ExecuteStreaming(
     stream_cv.notify_all();
     return true;
   };
+#endif
   auto response = http->PostStream(
       request.url, XmlaHeaders(request, transport_mode), envelope, "text/xml",
       [&](const_data_ptr_t data, idx_t data_length) {
         if (should_stop && should_stop()) {
           return false;
         }
+#if PBI_SUPPORTS_BACKGROUND_THREADS
         if (streaming_sx_response) {
           if (transport_mode == XmlaTransportMode::SX_XPRESS) {
             return xpress_stream.Feed(data, data_length,
@@ -3526,6 +3531,7 @@ void XmlaExecutor::ExecuteStreaming(
           }
           return push_stream_block(data, data_length);
         }
+#endif
         if (buffer_response) {
           buffered_response.append(reinterpret_cast<const char *>(data),
                                    data_length);
@@ -3535,6 +3541,7 @@ void XmlaExecutor::ExecuteStreaming(
       },
       true);
   bool decoded_response = streaming_sx_response;
+#if PBI_SUPPORTS_BACKGROUND_THREADS
   if (streaming_sx_response) {
     if (!(should_stop && should_stop()) && !response.HasRequestError() &&
         transport_mode == XmlaTransportMode::SX_XPRESS) {
@@ -3566,6 +3573,7 @@ void XmlaExecutor::ExecuteStreaming(
           static_cast<unsigned long long>(xpress_stream.BufferedBytes()));
     }
   }
+#endif
   if (buffer_response && !(should_stop && should_stop())) {
     try {
       decoded_response = DecodeBufferedXmlaResponse(

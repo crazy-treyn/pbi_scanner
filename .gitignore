@@ -5,6 +5,8 @@ build/
 *.duckdb_extension
 *.pyc
 __pycache__/
+test/wasm/node_modules/
+test/wasm/.node-xmlhttprequest-sync-*
 
 # Local-only benchmark/test material (never commit real workspace data)
 /local/**
