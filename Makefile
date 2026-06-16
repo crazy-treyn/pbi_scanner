@@ -6,7 +6,7 @@ export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
-.PHONY: pbi_scanner_unit_tests test-pbi-offline
+.PHONY: pbi_scanner_unit_tests test-pbi-offline test-pbi-wasm
 
 # BUILD_DIR selects release/debug/reldebug output (default: build/release).
 pbi_scanner_unit_tests:
@@ -34,6 +34,10 @@ test_reldebug_internal:
 
 test-pbi-offline: pbi_scanner_unit_tests
 	./build/release/test/unittest "test/sql/pbi_scanner.test"
+
+test-pbi-wasm:
+	uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh
+	uv run test/wasm/run_pbi_wasm_sqllogictest.py --platform wasm_eh
 
 .PHONY: ensure-uv
 ensure-uv:

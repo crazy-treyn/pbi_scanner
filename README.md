@@ -26,8 +26,8 @@ For browser DuckDB-Wasm usage, use `auth_mode := 'access_token'` and pass a
 short-lived token from the host application. Native auth paths such as
 `azure_cli`, browser-side `service_principal`, and Azure credential-chain
 secrets are intentionally unsupported in browser WASM. See
-[docs/wasm.md](docs/wasm.md) for build, loading, CORS/proxy, and smoke-test
-details.
+[docs/wasm.md](docs/wasm.md) for build, testing, CORS/proxy, and browser
+validation details.
 
 ### Step 1: Clone and Build
 
@@ -326,6 +326,20 @@ make test-pbi-offline
 ./build/release/test/unittest "test/sql/pbi_scanner.test"
 ./build/release/pbi_scanner_unit_tests
 ```
+
+DuckDB-Wasm validation (requires Emscripten 3.1.64; see [docs/wasm.md](docs/wasm.md)):
+
+```bash
+make wasm_eh
+uv run test/wasm/run_pbi_wasm_smoke.py --build
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
+# or, after building wasm_eh:
+make test-pbi-wasm
+```
+
+Browser smoke proves load, mock XMLA HTTP, and auth-header propagation. Browser
+sqllogictest runs `test/sql/pbi_scanner_wasm.test` for offline WASM-specific SQL
+assertions. Architecture notes: [docs/wasm_testing_plan.md](docs/wasm_testing_plan.md).
 
 ### Quality Checks
 

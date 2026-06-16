@@ -1,129 +1,105 @@
-# WASM Testing Plan
+# WASM Validation Architecture
 
-Plan to validate `feature/wasm-support` end-to-end: the extension builds, loads in DuckDB-Wasm in a real browser runtime, and runs a credential-free `dax_query` smoke against a local mock XMLA endpoint on CI and locally.
+How `pbi_scanner` validates DuckDB-Wasm builds beyond compile-only CI. WASM
+extensions are Emscripten side modules: a green link step does not prove the
+artifact loads, resolves symbols, or runs usefully in a browser. See also
+[Compiling Isn't Running: Functionally Testing DuckDB-WASM Extensions](https://rusty.today/blog/testing-duckdb-wasm-extensions/).
 
-## Goal
+Operational commands and toolchain pins live in [wasm.md](wasm.md). Agent
+entry points are in [AGENTS.md](../AGENTS.md).
 
-Prove WASM support works end-to-end before merging the feature branch.
+## Two Validation Layers
 
-## Where Things Stand
+| Layer | Harness | What it proves |
+|-------|---------|----------------|
+| **Browser smoke** | `test/wasm/smoke.mjs` | `INSTALL`/`LOAD`, function registration, same-origin mock XMLA HTTP, auth header propagation, XMLA parse/result materialization, and (`wasm_eh` only) native-only path rejection |
+| **Browser sqllogictest** | `test/wasm/run_sqllogictest.mjs` | Offline SQL assertions from `test/sql/pbi_scanner_wasm.test` — validation errors, WASM auth restrictions, `powerbi://` bind rejection — without live Power BI |
 
-The feature branch now has a working local and CI WASM validation path:
+Both run DuckDB-Wasm inside Chromium via Playwright. Node only serves assets and
+drives the browser; SQL executes in the same runtime shape production uses.
 
-- WASM artifacts compile locally (`make wasm_eh` / `make wasm_mvp`)
-- Native offline tests pass (including platform capability hooks)
-- Dedicated WASM smoke CI passes for `wasm_eh` and `wasm_mvp`
-- Distribution CI builds `wasm_eh` and `wasm_mvp` artifacts successfully
-- The smoke harness runs DuckDB-Wasm in Chromium through Playwright; Node only starts local servers and drives the browser
+Shared asset serving (extension repo layout, DuckDB-Wasm bundles, mock XMLA,
+CORS) lives in `test/wasm/browser_harness.mjs`.
 
-### Local Checkpoint: 2026-06-06
+## Native vs WASM Test Files
 
-- `make wasm_eh` passes locally and produces `build/wasm_eh/repository/v1.5.3/wasm_eh/pbi_scanner.duckdb_extension.wasm`
-- `make wasm_mvp` passes locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
-- `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh` passes locally with negative checks enabled
-- `uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_mvp` passes locally with success-path checks enabled and negative checks skipped
+| File | Runtime | Scope |
+|------|---------|-------|
+| `test/sql/pbi_scanner.test` | Native `unittest` | Full offline validation including `powerbi://` resolver/auth paths |
+| `test/sql/pbi_scanner_wasm.test` | Browser DuckDB-Wasm | WASM-portable cases: direct/loopback XMLA URLs, browser auth limits, earlier `powerbi://` bind failure |
 
-### Browser Smoke Checkpoint: 2026-06-06
+Do not run the native file unmodified against WASM — several `powerbi://`
+records reach different validation stages on native vs browser.
 
-- Replaced the Node DuckDB-Wasm runtime with a Playwright/Chromium browser smoke
-- `@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1` and cannot load the `v1.5.3` extension
-- `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3` and is still not compatible enough for this smoke
-- `@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3` and successfully loads the `wasm_eh` extension
-- Cross-origin synchronous XHR to a separate loopback XMLA server is blocked by Chromium before the mock server receives a request
-- Same-origin browser/proxy smoke passes for `wasm_eh`: `dax_query` returns `probe_ok = 1`, the mock endpoint sees `Authorization: Bearer mock-token`, and native-only auth/locator paths fail clearly
-- `wasm_mvp` builds locally after clearing stale Homebrew Emscripten CMake state and rebuilding with emsdk 3.1.64
-- Same-origin browser/proxy smoke passes for `wasm_mvp`: `dax_query` returns `probe_ok = 1` and the mock endpoint sees `Authorization: Bearer mock-token`
-- `wasm_mvp` negative error-message checks are skipped because deliberate validation errors currently surface as DuckDB-Wasm MVP runtime glue errors (`_setThrew is not defined`) instead of the extension's `InvalidInputException` messages
+When changing user-visible error text:
 
-### CI Checkpoint: 2026-06-06
+- Native paths → update `pbi_scanner.test`
+- WASM/browser paths → update `pbi_scanner_wasm.test`
 
-- `WASM Smoke Test` passes for both `wasm_eh` and `wasm_mvp` on commit `697bc94`
-- `Main Extension Distribution Pipeline` passes on commit `697bc94`
-- Stable distribution CI builds and uploads both WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `697bc94`
-- DuckDB-main forward-compatibility CI builds both WASM artifacts (`wasm_eh` and `wasm_mvp`) on commit `697bc94`
+## CI
 
-## Guiding Principle
+`.github/workflows/wasm-smoke.yml` on every push/PR:
 
-Keep the validation small, but test the real runtime shape. Use Node only to start local servers and drive the test; run DuckDB-Wasm itself inside a browser page. Browser HTTP should be validated through a same-origin loopback/proxy path because Chromium blocks the extension's synchronous cross-origin XHR before a separate mock XMLA server receives the request.
+1. Build `wasm_eh` or `wasm_mvp` (matrix leg)
+2. Run browser smoke
+3. Run browser sqllogictest against `pbi_scanner_wasm.test`
 
-## Plan
+Distribution CI still builds and uploads both WASM artifacts via the main
+extension pipeline.
 
-### 1. Get CI Building Both WASM Platforms
+## Platform Notes
 
-Push the fixes already on the branch (emsdk setup, formatting, HTTP stop-flag access) and confirm CI builds `wasm_eh` and `wasm_mvp` on every push.
+### `wasm_eh` (primary)
 
-**Outcome:** Reliable compile signal on Ubuntu with Emscripten 3.1.64 and Node 20 — without requiring HTTP to work yet.
+- Full smoke coverage including negative auth/locator checks
+- All sqllogictest records run (queries + `statement error`)
 
-### 2. Replace Node Runtime Smoke With Browser Smoke
+### `wasm_mvp`
 
-Move the smoke runtime into a real browser page, driven by Playwright or an equivalent browser runner:
+- Smoke success path only; negative error-message checks skipped
+- Sqllogictest skips `statement error` records — deliberate
+  `InvalidInputException` messages currently surface as DuckDB-Wasm MVP runtime
+  glue errors (`_setThrew is not defined`) instead of extension text
 
-- Start a local server for the page, DuckDB-Wasm assets, extension artifact, and same-origin mock XMLA endpoint
-- Open a browser page that instantiates `@duckdb/duckdb-wasm`
-- Select the DuckDB-Wasm bundle matching the extension platform under test (`wasm_eh` or `wasm_mvp`)
-- Run `INSTALL`, `LOAD pbi_scanner`, and the smoke SQL from inside the page
+Use `wasm_eh` for functional proof; keep `wasm_mvp` in CI as a compile/load
+regression leg.
 
-**Outcome:** The test validates the same browser APIs the extension will use in production, instead of validating a Node/worker/XHR shim combination.
+### `wasm_threads`
 
-### 3. Validate The End-To-End Success Path
+Excluded until the harness covers COOP/COEP and pthread deployment requirements.
 
-Run the credential-free `dax_query` path against the same-origin mock XMLA endpoint:
+## Local Commands
 
-- `dax_query` returns `probe_ok = 1`
-- The mock XMLA server receives `Authorization: Bearer mock-token`
-- The test passes for both `wasm_eh` and `wasm_mvp`
+```bash
+make wasm_eh
+uv run test/wasm/run_pbi_wasm_smoke.py --build
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
+make test-pbi-wasm    # smoke + sqllogictest on wasm_eh (expects artifact already built)
+```
 
-**Outcome:** Full browser smoke proves build, load, registration, HTTP, auth-header propagation, XMLA parsing, and result materialization.
+Prerequisites: Emscripten **3.1.64**, Node 20+, `npm ci` and Playwright Chromium
+under `test/wasm/`. Pin `@duckdb/duckdb-wasm` to a release whose embedded DuckDB
+version matches the extension (currently **v1.5.3**).
 
-### 4. Validate Browser-Specific Rejections
+## Sqllogictest Subset
 
-Keep the negative coverage narrow and user-visible:
+The browser runner supports: `query`, `statement ok|error`, `require`. Unsupported
+directives (`loop`, `foreach`, hash results, multiple connections, etc.) are out
+of scope.
 
-- `auth_mode := 'azure_cli'` fails with a clear unsupported-in-WASM error
-- `auth_mode := 'service_principal'` fails with a clear unsupported-in-WASM error
-- `powerbi://` locators fail at bind time with the documented browser limitation
+Error matching uses substring containment (not full sqllogictest exact match) so
+DuckDB-Wasm worker prefixes like `Invalid Input Error:` do not cause false
+failures.
 
-**Outcome:** CI catches accidental exposure of native-only auth/resolver paths in browser builds.
+## Out of Scope
 
-## Definition of Done
-
-- [x] CI builds `wasm_eh` and `wasm_mvp` green on every push/PR
-- [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_eh`
-- [x] Browser smoke loads the extension in DuckDB-Wasm 1.5.x for `wasm_mvp`
-- [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_eh`
-- [x] Browser smoke runs `dax_query` successfully against a mock XMLA endpoint for `wasm_mvp`
-- [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_eh`
-- [x] Browser smoke verifies the access-token auth header reaches the mock XMLA endpoint for `wasm_mvp`
-- [x] Browser smoke verifies browser auth and locator restrictions for `wasm_eh`
-- [x] `wasm_mvp` negative-message behavior is documented as a DuckDB-Wasm runtime limitation; success-path browser smoke still covers load, registration, HTTP, auth-header propagation, XMLA parsing, and result materialization
-- [x] [docs/wasm.md](wasm.md) reflects the actual toolchain (Emscripten, Node, browser runner, and duckdb-wasm version)
-
-## Suggested Order of Work
-
-1. Push or finish CI/build fixes -> confirm `wasm_eh` and `wasm_mvp` compile
-2. Add the browser smoke harness -> confirm extension `INSTALL` / `LOAD`
-3. Add mock XMLA success assertions -> confirm HTTP and result parsing
-4. Add narrow negative assertions -> confirm native-only paths are rejected
-5. Commit remaining branch cleanup (e.g. `http_client_wasm.cpp` array-literal fix) and update docs
-
-The recommended path is to avoid making Node emulate browser behavior:
-
-| Approach | Tradeoff |
-|----------|----------|
-| **Browser smoke** | Smallest reliable end-to-end signal; matches production runtime |
-| **Node smoke with XHR/worker shims** | Looks lightweight, but validates a hybrid runtime and adds brittle setup |
-| **Async HTTP refactor** | Larger C++ change; useful later, not required to validate this branch |
-
-## Out of Scope (for this plan)
-
-- Live Power BI / Azure token tests in a browser
-- `wasm_threads` platform
-- Large-payload streaming HTTP
-- Multiple-browser matrix
-- Performance benchmarking
-- Community extension publication
+- Live Power BI / Azure tests in CI
+- `wasm_threads`
+- Large-payload streaming HTTP benchmarks
+- Multi-browser matrix
+- Published-catalog verification (pre-deploy CI uses local artifacts only)
 
 ## Related Docs
 
-- [wasm.md](wasm.md) — build, load, auth, and limitations
-- [AGENTS.md](../AGENTS.md) — WASM build and smoke commands
+- [wasm.md](wasm.md) — build, load, auth, CORS, limitations
+- [release_publication.md](release_publication.md) — release checklist including WASM validation
