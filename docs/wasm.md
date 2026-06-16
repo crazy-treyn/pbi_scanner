@@ -28,8 +28,22 @@ uv run test/wasm/run_pbi_wasm_smoke.py --build
 uv run test/wasm/run_pbi_wasm_smoke.py --build --platform wasm_mvp
 ```
 
+Run the WASM sqllogictest suite with:
+
+```bash
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build --platform wasm_mvp
+```
+
+On `wasm_mvp`, statement-error records are skipped because deliberate validation
+errors currently surface as DuckDB-Wasm MVP runtime glue errors instead of the
+extension's `InvalidInputException` messages.
+
 GitHub Actions runs the same smoke for both `wasm_eh` and `wasm_mvp` via
-`.github/workflows/wasm-smoke.yml`.
+`.github/workflows/wasm-smoke.yml`. The workflow also runs
+`test/sql/pbi_scanner_wasm.test` through a browser sqllogictest harness so WASM
+validation covers the extension's offline SQL assertions, not just load/execute
+smoke.
 
 The smoke test starts a local Playwright/Chromium browser, serves DuckDB-Wasm
 assets and the extension artifact from a local unsigned extension repository,

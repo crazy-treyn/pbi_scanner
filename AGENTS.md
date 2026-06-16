@@ -36,8 +36,10 @@
   `build/<platform>/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`.
 - Browser smoke test: `uv run test/wasm/run_pbi_wasm_smoke.py --build` (add
   `--platform wasm_mvp` for the MVP artifact).
+- Browser sqllogictest: `uv run test/wasm/run_pbi_wasm_sqllogictest.py --build`
+  (runs `test/sql/pbi_scanner_wasm.test` in Chromium via DuckDB-Wasm).
 - CI runs `.github/workflows/wasm-smoke.yml` on `wasm_eh` and `wasm_mvp` for
-  every push and pull request.
+  every push and pull request (smoke plus `pbi_scanner_wasm.test`).
 - Browser auth is `access_token` only; see [docs/wasm.md](docs/wasm.md).
 - On Windows, prefer WSL/Linux or CI for Emscripten builds; native Windows uses
   `scripts\dev-win.ps1` for release/unittest only.

@@ -1,0 +1,144 @@
+# name: test/sql/pbi_scanner_wasm.test
+# description: pbi_scanner validation for DuckDB-Wasm
+# group: [sql]
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+0
+
+require pbi_scanner
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+1
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_tables', 'pbi_columns', 'pbi_measures', 'pbi_relationships');
+----
+4
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name LIKE '__pbi_scanner_test_%';
+----
+0
+
+statement error
+SELECT *
+FROM dax_query(
+    'Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+Data Source is required
+
+statement error
+SELECT *
+FROM dax_query(
+    '',
+    'EVALUATE ROW("x", 1)'
+);
+----
+connection_string is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+powerbi:// locators are not supported directly in DuckDB-Wasm
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=http://127.0.0.1:9999/xmla;Initial Catalog=mock;',
+    ''
+);
+----
+dax_text is required
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)',
+    access_token := 'dummy',
+    timeout_ms := 0
+);
+----
+timeout_ms must be greater than zero
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)',
+    access_token := 'dummy',
+    schema_probe_rows := -1
+);
+----
+schema_probe_rows must be zero or greater
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)'
+);
+----
+access_token named parameter or PBI_XMLA_ACCESS_TOKEN environment variable is required
+
+statement ok
+SET pbi_scanner_auth_mode='azure_cli';
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=https://example.com/xmla?vs=sobe_wowvirtualserver&db=example_db;Initial Catalog=sobe_wowvirtualserver-example_db;',
+    'EVALUATE ROW("x", 1)',
+    auth_mode := 'unsupported_mode'
+);
+----
+unsupported auth_mode "unsupported_mode"
+
+statement ok
+SET pbi_scanner_auth_mode='';
+
+statement error
+SET pbi_scanner_auth_mode='unsupported_mode';
+----
+unsupported auth_mode "unsupported_mode"
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=http://127.0.0.1:9999/xmla;Initial Catalog=mock;',
+    'EVALUATE ROW("x", 1)',
+    auth_mode := 'azure_cli'
+);
+----
+azure_cli auth is not supported in DuckDB-Wasm
+
+statement error
+SELECT *
+FROM dax_query(
+    'Data Source=http://127.0.0.1:9999/xmla;Initial Catalog=mock;',
+    'EVALUATE ROW("x", 1)',
+    auth_mode := 'service_principal',
+    tenant_id := 'tenant',
+    client_id := 'client',
+    client_secret := 'secret'
+);
+----
+service_principal auth is not supported in browser DuckDB-Wasm

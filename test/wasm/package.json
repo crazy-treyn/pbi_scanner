@@ -3,7 +3,8 @@
   "type": "module",
   "scripts": {
     "live:pbi": "node live_pbi.mjs",
-    "smoke": "node smoke.mjs"
+    "smoke": "node smoke.mjs",
+    "sqllogictest": "node run_sqllogictest.mjs"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev55.0",
