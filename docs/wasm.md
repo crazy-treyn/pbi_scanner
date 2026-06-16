@@ -96,8 +96,9 @@ uv run test/wasm/run_pbi_wasm_sqllogictest.py --build --platform wasm_mvp
 
 The sqllogictest harness (`test/wasm/run_sqllogictest.mjs`) uses the same browser
 runtime and shared asset server (`test/wasm/browser_harness.mjs`) but executes
-records from `test/sql/pbi_scanner_wasm.test` instead of the native
-`test/sql/pbi_scanner.test` file.
+records from `wasm_sql/pbi_scanner_wasm.test` instead of the native
+`test/sql/pbi_scanner.test` file. WASM sqllogictest files live under `wasm_sql/`
+(not `test/`) so DuckDB's native `unittest` sweep does not execute them.
 
 Why a separate test file: native sqllogictest includes `powerbi://` cases that
 reach resolver/auth validation in the C++ `unittest` binary. In WASM, `powerbi://`

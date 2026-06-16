@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WASM_TEST_DIR = REPO_ROOT / "test" / "wasm"
-DEFAULT_TEST = REPO_ROOT / "test" / "sql" / "pbi_scanner_wasm.test"
+DEFAULT_TEST = REPO_ROOT / "wasm_sql" / "pbi_scanner_wasm.test"
 
 
 def default_extension(platform: str) -> Path:
@@ -52,7 +52,7 @@ def main():
         type=Path,
         action="append",
         default=None,
-        help="sqllogictest file to run (default: test/sql/pbi_scanner_wasm.test)",
+        help="sqllogictest file to run (default: wasm_sql/pbi_scanner_wasm.test)",
     )
     parser.add_argument(
         "--verbose",

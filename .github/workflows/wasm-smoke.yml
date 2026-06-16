@@ -57,5 +57,5 @@ jobs:
         env:
           PBI_WASM_EXTENSION_PATH: build/${{ matrix.duckdb_platform }}/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm
           PBI_WASM_DUCKDB_PLATFORM: ${{ matrix.duckdb_platform }}
-        run: node run_sqllogictest.mjs --test ../../test/sql/pbi_scanner_wasm.test
+        run: node run_sqllogictest.mjs --test ../../wasm_sql/pbi_scanner_wasm.test
         working-directory: test/wasm

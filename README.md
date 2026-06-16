@@ -338,8 +338,9 @@ make test-pbi-wasm
 ```
 
 Browser smoke proves load, mock XMLA HTTP, and auth-header propagation. Browser
-sqllogictest runs `test/sql/pbi_scanner_wasm.test` for offline WASM-specific SQL
-assertions. Architecture notes: [docs/wasm_testing_plan.md](docs/wasm_testing_plan.md).
+sqllogictest runs `wasm_sql/pbi_scanner_wasm.test` for offline WASM-specific SQL
+assertions (kept outside `test/` so native `unittest` does not pick it up).
+Architecture notes: [docs/wasm_testing_plan.md](docs/wasm_testing_plan.md).
 
 ### Quality Checks
 

@@ -1,6 +1,6 @@
-# name: test/sql/pbi_scanner_wasm.test
+# name: wasm_sql/pbi_scanner_wasm.test
 # description: pbi_scanner validation for DuckDB-Wasm
-# group: [sql]
+# group: [wasm_sql]
 
 # Native offline assertions live in test/sql/pbi_scanner.test.
 # This file holds WASM-specific expectations (direct XMLA URLs, powerbi:// bind

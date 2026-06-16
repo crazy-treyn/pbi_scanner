@@ -29,7 +29,7 @@ function parseArgs(argv) {
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.tests.length) {
-    options.tests.push(resolve(getRepoRoot(), "test/sql/pbi_scanner_wasm.test"));
+    options.tests.push(resolve(getRepoRoot(), "wasm_sql/pbi_scanner_wasm.test"));
   }
   return options;
 }

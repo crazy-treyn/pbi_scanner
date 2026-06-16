@@ -13,7 +13,7 @@ entry points are in [AGENTS.md](../AGENTS.md).
 | Layer | Harness | What it proves |
 |-------|---------|----------------|
 | **Browser smoke** | `test/wasm/smoke.mjs` | `INSTALL`/`LOAD`, function registration, same-origin mock XMLA HTTP, auth header propagation, XMLA parse/result materialization, and (`wasm_eh` only) native-only path rejection |
-| **Browser sqllogictest** | `test/wasm/run_sqllogictest.mjs` | Offline SQL assertions from `test/sql/pbi_scanner_wasm.test` — validation errors, WASM auth restrictions, `powerbi://` bind rejection — without live Power BI |
+| **Browser sqllogictest** | `test/wasm/run_sqllogictest.mjs` | Offline SQL assertions from `wasm_sql/pbi_scanner_wasm.test` — validation errors, WASM auth restrictions, `powerbi://` bind rejection — without live Power BI |
 
 Both run DuckDB-Wasm inside Chromium via Playwright. Node only serves assets and
 drives the browser; SQL executes in the same runtime shape production uses.
@@ -26,7 +26,10 @@ CORS) lives in `test/wasm/browser_harness.mjs`.
 | File | Runtime | Scope |
 |------|---------|-------|
 | `test/sql/pbi_scanner.test` | Native `unittest` | Full offline validation including `powerbi://` resolver/auth paths |
-| `test/sql/pbi_scanner_wasm.test` | Browser DuckDB-Wasm | WASM-portable cases: direct/loopback XMLA URLs, browser auth limits, earlier `powerbi://` bind failure |
+| `wasm_sql/pbi_scanner_wasm.test` | Browser DuckDB-Wasm | WASM-portable cases: direct/loopback XMLA URLs, browser auth limits, earlier `powerbi://` bind failure |
+
+WASM sqllogictest files are kept outside `test/` because DuckDB's native
+`unittest` recursively registers every `test/**/*.test` file.
 
 Do not run the native file unmodified against WASM — several `powerbi://`
 records reach different validation stages on native vs browser.

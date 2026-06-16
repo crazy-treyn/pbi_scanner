@@ -65,7 +65,13 @@ ensure-format-tools: ensure-uv
 	fi; \
 	$$UV_CMD run --group format black --version >/dev/null
 
-format-check format format-fix: ensure-format-tools
+format-check: ensure-format-tools
+	python3 duckdb/scripts/format.py --all --check --directories src test wasm_sql
+
+format-fix: ensure-format-tools
+	python3 duckdb/scripts/format.py --all --fix --noconfirm --directories src test wasm_sql
+
+format: format-fix
 
 .PHONY: ensure-tidy-tools
 ensure-tidy-tools: ensure-uv
