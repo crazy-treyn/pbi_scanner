@@ -4,18 +4,32 @@ EXT_NAME=pbi_scanner
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
-# DuckDB v1.5.3 bundles fmt that uses stdext::checked_array_iterator, removed in
-# Visual Studio 2026 (windows-latest). Undefine _SECURE_SCL (/D=0 still leaves
-# #ifdef _SECURE_SCL true) so fmt uses the non-stdext path.
+FMT_FORMAT_H := $(DUCKDB_SRCDIR)third_party/fmt/include/fmt/format.h
+
+# DuckDB v1.5.3 fmt uses stdext::checked_array_iterator, removed in VS 2026.
 ifeq ($(DUCKDB_PLATFORM),windows_amd64)
-EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
-EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
+.PHONY: patch-fmt-vs2026
+patch-fmt-vs2026:
+	python $(PROJ_DIR)scripts/patch_fmt_vs2026.py $(FMT_FORMAT_H)
 else ifeq ($(DUCKDB_PLATFORM),windows_arm64)
-EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
-EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
+.PHONY: patch-fmt-vs2026
+patch-fmt-vs2026:
+	python $(PROJ_DIR)scripts/patch_fmt_vs2026.py $(FMT_FORMAT_H)
 endif
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
+
+ifeq ($(DUCKDB_PLATFORM),windows_amd64)
+release: patch-fmt-vs2026
+debug: patch-fmt-vs2026
+reldebug: patch-fmt-vs2026
+relassert: patch-fmt-vs2026
+else ifeq ($(DUCKDB_PLATFORM),windows_arm64)
+release: patch-fmt-vs2026
+debug: patch-fmt-vs2026
+reldebug: patch-fmt-vs2026
+relassert: patch-fmt-vs2026
+endif
 
 .PHONY: pbi_scanner_unit_tests test-pbi-offline test-pbi-wasm
 
