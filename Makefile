@@ -5,13 +5,14 @@ EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
 # DuckDB v1.5.3 bundles fmt that uses stdext::checked_array_iterator, removed in
-# Visual Studio 2026 (windows-latest). Disable _SECURE_SCL so fmt compiles.
+# Visual Studio 2026 (windows-latest). Undefine _SECURE_SCL (/D=0 still leaves
+# #ifdef _SECURE_SCL true) so fmt uses the non-stdext path.
 ifeq ($(DUCKDB_PLATFORM),windows_amd64)
-EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
-EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
+EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
 else ifeq ($(DUCKDB_PLATFORM),windows_arm64)
-EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
-EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
+EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/U_SECURE_SCL"
 endif
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
