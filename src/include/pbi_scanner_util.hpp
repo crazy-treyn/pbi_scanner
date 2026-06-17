@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pbi_duckdb_compat.hpp"
+
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/function.hpp"
@@ -20,15 +22,15 @@ inline string Trimmed(const string &value) {
 
 inline bool
 HasNonNullNamedParameter(const named_parameter_map_t &named_parameters,
-                         const string &name) {
-  auto entry = named_parameters.find(name);
+                         const char *name) {
+  auto entry = pbi_compat::FindNamedParameter(named_parameters, name);
   return entry != named_parameters.end() && !entry->second.IsNull();
 }
 
 inline string
 GetOptionalNamedParameter(const named_parameter_map_t &named_parameters,
-                          const string &name) {
-  auto entry = named_parameters.find(name);
+                          const char *name) {
+  auto entry = pbi_compat::FindNamedParameter(named_parameters, name);
   if (entry == named_parameters.end() || entry->second.IsNull()) {
     return string();
   }

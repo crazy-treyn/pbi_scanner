@@ -19,6 +19,9 @@ git -C extension-ci-tools rev-parse HEAD
 make format-check
 make release
 ./build/release/test/unittest "test/sql/pbi_scanner.test"
+make wasm_eh
+uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --platform wasm_eh
 make tidy-check
 ```
 
@@ -39,6 +42,9 @@ git status --short --branch
 make format-check
 make release
 ./build/release/test/unittest "test/sql/pbi_scanner.test"
+make wasm_eh
+uv run test/wasm/run_pbi_wasm_smoke.py --platform wasm_eh
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --platform wasm_eh
 make tidy-check
 git add extension_config.cmake README.md .github/workflows/MainDistributionPipeline.yml pyproject.toml uv.lock
 git commit -m "Prepare pbi_scanner X.Y.Z release"
@@ -91,4 +97,7 @@ git push -u origin HEAD
 gh pr create --repo duckdb/community-extensions --base main --head <fork-owner>:pbi_scanner-vX.Y.Z --title "Update pbi_scanner to X.Y.Z" --body "<validation evidence>"
 ```
 
-Community PR validation evidence should include stable CI, next CI if available, local build/test commands, release tag, release commit SHA, and known platform exclusions.
+Community PR validation evidence should include stable CI, next CI if available,
+local build/test commands, release tag, release commit SHA, known platform
+exclusions, and WASM smoke plus sqllogictest green when shipping `wasm_eh` /
+`wasm_mvp` artifacts.

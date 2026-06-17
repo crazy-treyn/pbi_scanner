@@ -19,22 +19,40 @@ The expected local artifact is:
 build/wasm_eh/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm
 ```
 
-## Smoke Test
+## Testing
 
-Run the credential-free browser WASM smoke test with:
+WASM validation has two layers. See [wasm_testing_plan.md](wasm_testing_plan.md)
+for architecture and rationale.
+
+### Prerequisites
+
+- Emscripten **3.1.64** (CI uses `mymindstorm/setup-emsdk@v13`)
+- Node 20+
+- From `test/wasm/`: `npm ci` and `npx playwright install --with-deps chromium`
+- Optional env vars:
+  - `PBI_WASM_EXTENSION_PATH` — path to `pbi_scanner.duckdb_extension.wasm`
+    (default: `build/wasm_eh/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`)
+  - `PBI_WASM_DUCKDB_PLATFORM` — `wasm_eh` or `wasm_mvp` (default: `wasm_eh`)
+
+After `make wasm_eh`, a convenience target runs both layers:
+
+```bash
+make test-pbi-wasm
+```
+
+### Browser smoke
+
+Run the credential-free end-to-end smoke with:
 
 ```bash
 uv run test/wasm/run_pbi_wasm_smoke.py --build
 uv run test/wasm/run_pbi_wasm_smoke.py --build --platform wasm_mvp
 ```
 
-GitHub Actions runs the same smoke for both `wasm_eh` and `wasm_mvp` via
-`.github/workflows/wasm-smoke.yml`.
-
-The smoke test starts a local Playwright/Chromium browser, serves DuckDB-Wasm
-assets and the extension artifact from a local unsigned extension repository,
-serves a same-origin mock XMLA endpoint, loads `pbi_scanner` in
-`@duckdb/duckdb-wasm`, verifies the SQL table functions are registered, and runs:
+The smoke harness (`test/wasm/smoke.mjs`) starts Playwright/Chromium, serves
+DuckDB-Wasm assets and the extension from a local unsigned repository, serves a
+same-origin mock XMLA endpoint, loads `pbi_scanner` in `@duckdb/duckdb-wasm`,
+verifies the SQL table functions are registered, and runs:
 
 ```sql
 SELECT *
@@ -60,16 +78,44 @@ error-message assertions. In the current DuckDB-Wasm MVP runtime, deliberate
 validation errors surface as runtime glue errors instead of the extension's
 `InvalidInputException` messages.
 
-Set `PBI_WASM_DUCKDB_PLATFORM` to `wasm_eh` or `wasm_mvp` when running smoke so
-the DuckDB-Wasm core matches the extension artifact (CI sets this from the matrix
-leg). When unset, smoke defaults to `wasm_eh`.
-
 The mock XMLA endpoint is intentionally same-origin with the browser page. The
 WASM HTTP client uses synchronous browser XHR; Chromium blocks synchronous
 cross-origin loopback XHR before the mock server receives a request, even with
 CORS headers. The smoke therefore validates the documented browser proxy shape:
 host applications should either call same-origin/loopback XMLA URLs or route
 cross-origin XMLA traffic through a backend/proxy with appropriate CORS policy.
+
+### Browser sqllogictest
+
+Run offline SQL assertions against DuckDB-Wasm with:
+
+```bash
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
+uv run test/wasm/run_pbi_wasm_sqllogictest.py --build --platform wasm_mvp
+```
+
+The sqllogictest harness (`test/wasm/run_sqllogictest.mjs`) uses the same browser
+runtime and shared asset server (`test/wasm/browser_harness.mjs`) but executes
+records from `wasm_sql/pbi_scanner_wasm.test` instead of the native
+`test/sql/pbi_scanner.test` file. WASM sqllogictest files live under `wasm_sql/`
+(not `test/`) so DuckDB's native `unittest` sweep does not execute them.
+
+Why a separate test file: native sqllogictest includes `powerbi://` cases that
+reach resolver/auth validation in the C++ `unittest` binary. In WASM, `powerbi://`
+fails earlier at bind time with a browser-specific message. WASM tests use direct
+or loopback XMLA URLs where validation stages match the browser build.
+
+Supported directives: `query`, `statement ok`, `statement error`, `require`.
+Unsupported sqllogictest features (`loop`, `foreach`, hash results, multiple
+connections, etc.) are out of scope.
+
+On `wasm_mvp`, `statement error` records are skipped (same MVP runtime limitation
+as smoke negative checks). `wasm_eh` runs the full WASM sqllogictest file.
+
+### CI
+
+GitHub Actions runs smoke and sqllogictest for both `wasm_eh` and `wasm_mvp` via
+`.github/workflows/wasm-smoke.yml` on every push and pull request.
 
 ## Optional Live Semantic Model Test
 

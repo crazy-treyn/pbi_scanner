@@ -2,6 +2,7 @@
 
 #include "connection_string.hpp"
 #include "http_client.hpp"
+#include "pbi_duckdb_compat.hpp"
 #include "pbi_platform.hpp"
 #include "pbi_scanner_util.hpp"
 
@@ -217,7 +218,7 @@ static string UrlEncode(const string &value) {
 }
 
 static string GetOptionalSecretValue(const KeyValueSecret &secret,
-                                     const string &key) {
+                                     const char *key) {
   Value value;
   if (!secret.TryGetValue(key, value) || value.IsNull()) {
     return string();
@@ -602,7 +603,8 @@ static string ResolveSecretBackedAccessToken(ClientContext &context,
   }
 
   auto &base_secret = *secret_entry->secret;
-  if (!StringUtil::CIEquals(base_secret.GetType(), "azure")) {
+  if (!StringUtil::CIEquals(pbi_compat::IdentifierName(base_secret.GetType()),
+                            "azure")) {
     throw InvalidInputException("Secret \"%s\" must be TYPE azure",
                                 secret_name);
   }
@@ -614,7 +616,8 @@ static string ResolveSecretBackedAccessToken(ClientContext &context,
                                 secret_name);
   }
 
-  auto provider = StringUtil::Lower(Trimmed(base_secret.GetProvider()));
+  auto provider = StringUtil::Lower(
+      Trimmed(pbi_compat::IdentifierName(base_secret.GetProvider())));
   if (provider == "credential_chain") {
     return ResolveCredentialChainSecret(*key_value_secret, secret_name);
   }

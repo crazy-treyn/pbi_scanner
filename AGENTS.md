@@ -3,7 +3,7 @@
 ## Scope
 
 - This repo builds a DuckDB C++ extension named `pbi_scanner` for querying Power BI Semantic Models through DAX/XMLA.
-- Normal edit surface: `src/`, `src/include/`, `test/sql/`, `README.md`, `CMakeLists.txt`, and `extension_config.cmake`.
+- Normal edit surface: `src/`, `src/include/`, `test/sql/`, `test/wasm/`, `wasm_sql/`, `README.md`, `CMakeLists.txt`, and `extension_config.cmake`.
 - Treat `duckdb/` and `extension-ci-tools/` as pinned upstream/vendor trees; do not edit them unless the task explicitly requires it.
 - Current stable target is DuckDB `v1.5.3`; CI also has a forward-compatibility build against DuckDB `main`.
 
@@ -30,15 +30,23 @@
 - Format/tidy targets bootstrap tools with `uv` from `pyproject.toml`; run commands from repo root.
 - macOS OpenSSL fallback when CMake cannot find it: `OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" make release`.
 
-## DuckDB-Wasm Build And Smoke
+## DuckDB-Wasm Build And Test
 
 - Build artifacts: `make wasm_eh` (primary) or `make wasm_mvp`; output under
   `build/<platform>/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`.
 - Browser smoke test: `uv run test/wasm/run_pbi_wasm_smoke.py --build` (add
   `--platform wasm_mvp` for the MVP artifact).
+- Browser sqllogictest: `uv run test/wasm/run_pbi_wasm_sqllogictest.py --build`
+  (runs `wasm_sql/pbi_scanner_wasm.test` in Chromium via DuckDB-Wasm).
+- Convenience target (after `make wasm_eh`): `make test-pbi-wasm` runs smoke plus
+  sqllogictest on `wasm_eh`.
 - CI runs `.github/workflows/wasm-smoke.yml` on `wasm_eh` and `wasm_mvp` for
-  every push and pull request.
-- Browser auth is `access_token` only; see [docs/wasm.md](docs/wasm.md).
+  every push and pull request (smoke plus `pbi_scanner_wasm.test`).
+- Architecture: [docs/wasm_testing_plan.md](docs/wasm_testing_plan.md); commands
+  and limitations: [docs/wasm.md](docs/wasm.md).
+- Browser auth is `access_token` only.
+- On `wasm_mvp`, smoke negative checks and sqllogictest `statement error` records
+  are skipped (DuckDB-Wasm MVP runtime glue hides extension error messages).
 - On Windows, prefer WSL/Linux or CI for Emscripten builds; native Windows uses
   `scripts\dev-win.ps1` for release/unittest only.
 
@@ -56,7 +64,10 @@
 
 - Tests under `test/sql/` must be deterministic and offline; do not add live Power BI/Azure requirements there.
 - Prefer sqllogictest coverage for extension behavior, especially user-visible validation errors.
-- If an error message or parse rule changes, update exact `statement error` expectations in `test/sql/pbi_scanner.test`.
+- If an error message or parse rule changes, update exact `statement error` expectations in
+  `test/sql/pbi_scanner.test` for native paths and `wasm_sql/pbi_scanner_wasm.test` for
+  WASM/browser paths. Keep WASM sqllogictest files outside `test/` so native
+  `unittest` does not execute them.
 - Offline smoke helper: `uv run bench_native_http.py --smoke` (LOAD + `dax_query` registration, then Catch `[smoke]` tests).
 - Optional bind tuning: `PBI_SCANNER_SCHEMA_PROBE_ROWS` sets the default limited schema probe row count (override per query with `schema_probe_rows := ...`).
 - Live benchmark/helper: `uv run --group bench query_semantic_model_minimal.py`; use `PBI_BENCH_*` env vars and keep real workspace IDs/secrets in env, `.env` (gitignored), or `local/`.
