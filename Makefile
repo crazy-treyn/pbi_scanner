@@ -4,8 +4,6 @@ EXT_NAME=pbi_scanner
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
-FMT_FORMAT_H := $(DUCKDB_SRCDIR)third_party/fmt/include/fmt/format.h
-
 # DuckDB v1.5.3 fmt uses stdext::checked_array_iterator, removed in VS 2026.
 ifeq ($(DUCKDB_PLATFORM),windows_amd64)
 .PHONY: patch-fmt-vs2026
@@ -18,6 +16,8 @@ patch-fmt-vs2026:
 endif
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
+
+FMT_FORMAT_H := $(DUCKDB_SRCDIR)third_party/fmt/include/fmt/format.h
 
 ifeq ($(DUCKDB_PLATFORM),windows_amd64)
 release: patch-fmt-vs2026
