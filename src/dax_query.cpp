@@ -727,7 +727,7 @@ TableFunction CreateDaxQueryFunction() {
 
 static TableFunction CreateFixedDaxFunction(const string &name,
                                             const string &dax_text) {
-  TableFunction function(name, {LogicalType::VARCHAR}, DaxQueryExecute,
+  TableFunction function(name.c_str(), {LogicalType::VARCHAR}, DaxQueryExecute,
                          DaxQueryBind, DaxQueryInit);
   function.extra_info = dax_text;
   RegisterCommonDaxNamedParameters(function);
