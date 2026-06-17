@@ -4,6 +4,16 @@ EXT_NAME=pbi_scanner
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 export PATH := ${PROJ_DIR}.venv/bin:${PATH}
 
+# DuckDB v1.5.3 bundles fmt that uses stdext::checked_array_iterator, removed in
+# Visual Studio 2026 (windows-latest). Disable _SECURE_SCL so fmt compiles.
+ifeq ($(DUCKDB_PLATFORM),windows_amd64)
+EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+else ifeq ($(DUCKDB_PLATFORM),windows_arm64)
+EXT_RELEASE_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+EXT_DEBUG_FLAGS += -DCMAKE_CXX_FLAGS="/D_SECURE_SCL=0"
+endif
+
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
 .PHONY: pbi_scanner_unit_tests test-pbi-offline test-pbi-wasm
