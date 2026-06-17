@@ -15,7 +15,8 @@ namespace duckdb {
 namespace pbi_compat {
 
 inline named_parameter_map_t::const_iterator
-FindNamedParameter(const named_parameter_map_t &named_parameters, const char *name) {
+FindNamedParameter(const named_parameter_map_t &named_parameters,
+                   const char *name) {
   return named_parameters.find(name);
 }
 
@@ -24,9 +25,7 @@ inline string IdentifierName(const Identifier &identifier) {
   return identifier.GetIdentifierName();
 }
 #else
-inline const string &IdentifierName(const string &value) {
-  return value;
-}
+inline const string &IdentifierName(const string &value) { return value; }
 #endif
 
 } // namespace pbi_compat

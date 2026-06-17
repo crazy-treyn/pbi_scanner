@@ -603,8 +603,8 @@ static string ResolveSecretBackedAccessToken(ClientContext &context,
   }
 
   auto &base_secret = *secret_entry->secret;
-  if (!StringUtil::CIEquals(
-          pbi_compat::IdentifierName(base_secret.GetType()), "azure")) {
+  if (!StringUtil::CIEquals(pbi_compat::IdentifierName(base_secret.GetType()),
+                            "azure")) {
     throw InvalidInputException("Secret \"%s\" must be TYPE azure",
                                 secret_name);
   }
