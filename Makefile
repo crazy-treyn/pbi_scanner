@@ -17,7 +17,7 @@ endif
 
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
-FMT_FORMAT_H := $(DUCKDB_SRCDIR)third_party/fmt/include/fmt/format.h
+FMT_FORMAT_H := $(DUCKDB_SRCDIR)/third_party/fmt/include/fmt/format.h
 
 ifeq ($(DUCKDB_PLATFORM),windows_amd64)
 release: patch-fmt-vs2026
