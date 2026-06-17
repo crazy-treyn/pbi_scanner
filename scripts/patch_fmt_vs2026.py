@@ -31,6 +31,9 @@ def main() -> int:
     if FMT_SECURE_SCL_BLOCK not in text:
         if FMT_SECURE_SCL_REPLACEMENT in text:
             return 0
+        if "stdext::checked_array_iterator" not in text:
+            # DuckDB main (and other upstream bumps) may already ship a VS 2026-safe fmt.
+            return 0
         print(f"fmt patch pattern not found in {path}", file=sys.stderr)
         return 1
 
