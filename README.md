@@ -1,3 +1,5 @@
+
+
 # pbi_scanner
 
 DuckDB extension for querying Power BI Semantic Models with DAX.
@@ -21,6 +23,8 @@ DuckDB extension for querying Power BI Semantic Models with DAX.
 - DuckDB extension toolchain requirements (CMake, C++ build toolchain, OpenSSL)
 - Git with submodule support
 - Azure CLI (`az`) installed
+
+Current stable target is DuckDB `v1.5.3`.
 
 For browser DuckDB-Wasm usage, use `auth_mode := 'access_token'` and pass a
 short-lived token from the host application. Native auth paths such as
