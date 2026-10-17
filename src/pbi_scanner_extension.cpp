@@ -35,16 +35,24 @@ static const string kExampleConnectionString =
     "Data Source=powerbi://api.powerbi.com/v1.0/myorg/"
     "Example%20Workspace;Initial Catalog=example_semantic_model;";
 
-static const vector<string> kNamedOptionNames = {
-    "auth_mode",           "access_token",
-    "secret_name",         "tenant_id",
-    "client_id",           "client_secret",
-    "effective_user_name", "timeout_ms",
-    "schema_probe_rows",   "normalize_dax_column_names"};
-
-static vector<string> CatalogParameterNames(vector<string> positional) {
-  positional.insert(positional.end(), kNamedOptionNames.begin(),
-                    kNamedOptionNames.end());
+static vector<string> CatalogParameterNames(const TableFunction &function,
+                                            vector<string> positional) {
+  if (positional.size() != function.arguments.size()) {
+    throw InternalException("pbi_scanner catalog positional names do not match "
+                            "the function arguments");
+  }
+  // v1.5.6 duckdb_functions() writes parameter_types as the positional
+  // arguments followed by named_parameters in unordered_map iteration order,
+  // then applies FunctionDescription.parameter_names by index. Copy the map the
+  // same way that catalog walk does so each name stays on its type. The
+  // iteration order is not stable across standard libraries, so tests zip names
+  // to types instead of expecting one list. DuckDB main ignores this list when
+  // signature names already match the type count. There, parameters and
+  // parameter_types both follow SetName plus WithTypedKwargs insertion order.
+  TableFunction copied = function;
+  for (auto &entry : copied.named_parameters) {
+    positional.push_back(entry.first);
+  }
   return positional;
 }
 
@@ -89,37 +97,42 @@ static void LoadInternal(ExtensionLoader &loader) {
       "off; opt in via SET or normalize_dax_column_names)",
       LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
+  auto dax_query = CreateDaxQueryFunction();
   RegisterDocumentedTableFunction(
-      loader, CreateDaxQueryFunction(),
-      CatalogParameterNames({"connection_string", "dax_text"}),
+      loader, dax_query,
+      CatalogParameterNames(dax_query, {"connection_string", "dax_text"}),
       "Runs a DAX statement against a Power BI semantic model or a direct "
       "XMLA endpoint and returns the result rows as a table. "
       "connection_string and dax_text are positional; named options use :=.",
       ExampleSelect("dax_query", "EVALUATE ROW(\"probe_ok\", 1)"));
+  auto pbi_tables = CreatePbiTablesFunction();
   RegisterDocumentedTableFunction(
-      loader, CreatePbiTablesFunction(),
-      CatalogParameterNames({"connection_string"}),
+      loader, pbi_tables,
+      CatalogParameterNames(pbi_tables, {"connection_string"}),
       "Returns the tables in a Power BI semantic model by running EVALUATE "
       "INFO.VIEW.TABLES(). connection_string is positional; named options use "
       ":=.",
       ExampleSelect("pbi_tables", ""));
+  auto pbi_columns = CreatePbiColumnsFunction();
   RegisterDocumentedTableFunction(
-      loader, CreatePbiColumnsFunction(),
-      CatalogParameterNames({"connection_string"}),
+      loader, pbi_columns,
+      CatalogParameterNames(pbi_columns, {"connection_string"}),
       "Returns the columns in a Power BI semantic model by running EVALUATE "
       "INFO.VIEW.COLUMNS(). connection_string is positional; named options use "
       ":=.",
       ExampleSelect("pbi_columns", ""));
+  auto pbi_measures = CreatePbiMeasuresFunction();
   RegisterDocumentedTableFunction(
-      loader, CreatePbiMeasuresFunction(),
-      CatalogParameterNames({"connection_string"}),
+      loader, pbi_measures,
+      CatalogParameterNames(pbi_measures, {"connection_string"}),
       "Returns the measures in a Power BI semantic model by running EVALUATE "
       "INFO.VIEW.MEASURES(). connection_string is positional; named options "
       "use :=.",
       ExampleSelect("pbi_measures", ""));
+  auto pbi_relationships = CreatePbiRelationshipsFunction();
   RegisterDocumentedTableFunction(
-      loader, CreatePbiRelationshipsFunction(),
-      CatalogParameterNames({"connection_string"}),
+      loader, pbi_relationships,
+      CatalogParameterNames(pbi_relationships, {"connection_string"}),
       "Returns the relationships in a Power BI semantic model by running "
       "EVALUATE INFO.VIEW.RELATIONSHIPS(). "
       "connection_string is positional; named options use :=.",

@@ -46,12 +46,12 @@ WHERE function_name = 'dax_query';
 ----
 SELECT * FROM dax_query('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;', 'EVALUATE ROW("probe_ok", 1)');
 
-query T
-SELECT parameters::VARCHAR
+query II
+SELECT len(parameters), len(parameter_types)
 FROM duckdb_functions()
 WHERE function_name = 'dax_query';
 ----
-[connection_string, dax_text, auth_mode, access_token, secret_name, tenant_id, client_id, client_secret, effective_user_name, timeout_ms, schema_probe_rows, normalize_dax_column_names]
+12	12
 
 query T
 SELECT description
@@ -75,16 +75,84 @@ SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Exa
 SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
 SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
 
-query T
-SELECT parameters::VARCHAR
+query II
+SELECT len(parameters), len(parameter_types)
 FROM duckdb_functions()
 WHERE function_name IN ('pbi_columns', 'pbi_measures', 'pbi_relationships', 'pbi_tables')
 ORDER BY function_name;
 ----
-[connection_string, auth_mode, access_token, secret_name, tenant_id, client_id, client_secret, effective_user_name, timeout_ms, schema_probe_rows, normalize_dax_column_names]
-[connection_string, auth_mode, access_token, secret_name, tenant_id, client_id, client_secret, effective_user_name, timeout_ms, schema_probe_rows, normalize_dax_column_names]
-[connection_string, auth_mode, access_token, secret_name, tenant_id, client_id, client_secret, effective_user_name, timeout_ms, schema_probe_rows, normalize_dax_column_names]
-[connection_string, auth_mode, access_token, secret_name, tenant_id, client_id, client_secret, effective_user_name, timeout_ms, schema_probe_rows, normalize_dax_column_names]
+11	11
+11	11
+11	11
+11	11
+
+# Names follow unordered_map iteration on v1.5.6 and WithTypedKwargs order on DuckDB main.
+# Assert the pairs, sorted, so either order passes.
+query TTT
+SELECT function_name, name, type
+FROM (
+    SELECT function_name, unnest(parameters) AS name, unnest(parameter_types) AS type
+    FROM duckdb_functions()
+    WHERE function_name IN ('dax_query', 'pbi_columns', 'pbi_measures', 'pbi_relationships', 'pbi_tables')
+)
+ORDER BY function_name, name;
+----
+dax_query	access_token	VARCHAR
+dax_query	auth_mode	VARCHAR
+dax_query	client_id	VARCHAR
+dax_query	client_secret	VARCHAR
+dax_query	connection_string	VARCHAR
+dax_query	dax_text	VARCHAR
+dax_query	effective_user_name	VARCHAR
+dax_query	normalize_dax_column_names	BOOLEAN
+dax_query	schema_probe_rows	BIGINT
+dax_query	secret_name	VARCHAR
+dax_query	tenant_id	VARCHAR
+dax_query	timeout_ms	BIGINT
+pbi_columns	access_token	VARCHAR
+pbi_columns	auth_mode	VARCHAR
+pbi_columns	client_id	VARCHAR
+pbi_columns	client_secret	VARCHAR
+pbi_columns	connection_string	VARCHAR
+pbi_columns	effective_user_name	VARCHAR
+pbi_columns	normalize_dax_column_names	BOOLEAN
+pbi_columns	schema_probe_rows	BIGINT
+pbi_columns	secret_name	VARCHAR
+pbi_columns	tenant_id	VARCHAR
+pbi_columns	timeout_ms	BIGINT
+pbi_measures	access_token	VARCHAR
+pbi_measures	auth_mode	VARCHAR
+pbi_measures	client_id	VARCHAR
+pbi_measures	client_secret	VARCHAR
+pbi_measures	connection_string	VARCHAR
+pbi_measures	effective_user_name	VARCHAR
+pbi_measures	normalize_dax_column_names	BOOLEAN
+pbi_measures	schema_probe_rows	BIGINT
+pbi_measures	secret_name	VARCHAR
+pbi_measures	tenant_id	VARCHAR
+pbi_measures	timeout_ms	BIGINT
+pbi_relationships	access_token	VARCHAR
+pbi_relationships	auth_mode	VARCHAR
+pbi_relationships	client_id	VARCHAR
+pbi_relationships	client_secret	VARCHAR
+pbi_relationships	connection_string	VARCHAR
+pbi_relationships	effective_user_name	VARCHAR
+pbi_relationships	normalize_dax_column_names	BOOLEAN
+pbi_relationships	schema_probe_rows	BIGINT
+pbi_relationships	secret_name	VARCHAR
+pbi_relationships	tenant_id	VARCHAR
+pbi_relationships	timeout_ms	BIGINT
+pbi_tables	access_token	VARCHAR
+pbi_tables	auth_mode	VARCHAR
+pbi_tables	client_id	VARCHAR
+pbi_tables	client_secret	VARCHAR
+pbi_tables	connection_string	VARCHAR
+pbi_tables	effective_user_name	VARCHAR
+pbi_tables	normalize_dax_column_names	BOOLEAN
+pbi_tables	schema_probe_rows	BIGINT
+pbi_tables	secret_name	VARCHAR
+pbi_tables	tenant_id	VARCHAR
+pbi_tables	timeout_ms	BIGINT
 
 query I
 SELECT count(*)
