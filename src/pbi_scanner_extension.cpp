@@ -6,6 +6,7 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 #include <string>
 
@@ -30,6 +31,21 @@ static void SetPbiScannerAuthMode(ClientContext &context, SetScope scope,
   throw InvalidInputException("unsupported auth_mode \"%s\"", value);
 }
 
+// Description and example strings are placeholders until catalog copy is approved.
+static void RegisterDocumentedTableFunction(ExtensionLoader &loader,
+                                            TableFunction function,
+                                            vector<string> parameter_names) {
+  CreateTableFunctionInfo info(std::move(function));
+  info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+  FunctionDescription description;
+  description.parameter_names = std::move(parameter_names);
+  description.description = "placeholder";
+  description.examples.push_back("SELECT * FROM placeholder");
+  description.categories.push_back("powerbi");
+  info.descriptions.push_back(std::move(description));
+  loader.RegisterFunction(std::move(info));
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
   auto &config = loader.GetDatabaseInstance().config;
   config.AddExtensionOption("pbi_scanner_auth_mode",
@@ -44,11 +60,16 @@ static void LoadInternal(ExtensionLoader &loader) {
       "off; opt in via SET or normalize_dax_column_names)",
       LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
-  loader.RegisterFunction(CreateDaxQueryFunction());
-  loader.RegisterFunction(CreatePbiTablesFunction());
-  loader.RegisterFunction(CreatePbiColumnsFunction());
-  loader.RegisterFunction(CreatePbiMeasuresFunction());
-  loader.RegisterFunction(CreatePbiRelationshipsFunction());
+  RegisterDocumentedTableFunction(loader, CreateDaxQueryFunction(),
+                                  {"connection_string", "dax_text"});
+  RegisterDocumentedTableFunction(loader, CreatePbiTablesFunction(),
+                                  {"connection_string"});
+  RegisterDocumentedTableFunction(loader, CreatePbiColumnsFunction(),
+                                  {"connection_string"});
+  RegisterDocumentedTableFunction(loader, CreatePbiMeasuresFunction(),
+                                  {"connection_string"});
+  RegisterDocumentedTableFunction(loader, CreatePbiRelationshipsFunction(),
+                                  {"connection_string"});
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

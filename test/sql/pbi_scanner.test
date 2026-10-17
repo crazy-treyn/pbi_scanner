@@ -32,6 +32,32 @@ WHERE function_name LIKE '__pbi_scanner_test_%';
 ----
 0
 
+# Catalog metadata is present. Description and example text stay unasserted
+# until the approved copy replaces the registration placeholder.
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'dax_query'
+  AND description IS NOT NULL
+  AND len(examples) > 0
+  AND list_contains(categories, 'powerbi')
+  AND parameters[1] = 'connection_string'
+  AND parameters[2] = 'dax_text';
+----
+1
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_tables', 'pbi_columns', 'pbi_measures', 'pbi_relationships')
+  AND description IS NOT NULL
+  AND len(examples) > 0
+  AND list_contains(categories, 'powerbi')
+  AND parameters[1] = 'connection_string'
+  AND NOT list_contains(parameters, 'dax_text');
+----
+4
+
 statement error
 SELECT *
 FROM dax_query(
