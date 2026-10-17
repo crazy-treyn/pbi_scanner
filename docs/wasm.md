@@ -183,14 +183,13 @@ full live semantic-model proof.
 
 This extension is built against DuckDB **v1.5.6** (see the `duckdb/` submodule).
 The smoke harness pins `@duckdb/duckdb-wasm` in `test/wasm/package.json`
-(currently **1.33.1-dev55.0**, which embeds DuckDB **v1.5.3**). Use a
-DuckDB-Wasm npm release whose embedded DuckDB version matches the extension you
-load; version skew can cause ABI or runtime failures. For example,
-`@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1`, and
-`@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`; neither is suitable for
-testing this `v1.5.6` extension. The pinned **1.33.1-dev55.0** package is older
-than this extension's engine and needs a matching DuckDB-Wasm release before
-browser tests are meaningful.
+(currently **1.33.1-dev65.0**, which embeds DuckDB **v1.5.6**, submodule
+`069cc9f9b5be802405797faecc284961b07c70ef`). Use a DuckDB-Wasm npm release whose
+embedded DuckDB version matches the extension you load; version skew can cause
+ABI or runtime failures. For example, `@duckdb/duckdb-wasm@1.29.0` embeds
+DuckDB `v1.1.1`, `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`, and
+`@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3`; none of those is
+suitable for testing this `v1.5.6` extension.
 
 When publishing or integrating in a host app, record both:
 
