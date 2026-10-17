@@ -2,6 +2,7 @@
 
 #include "pbi_scanner_extension.hpp"
 #include "dax_query.hpp"
+#include "pbi_duckdb_compat.hpp"
 #include "pbi_scanner_util.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -37,22 +38,36 @@ static const string kExampleConnectionString =
 
 static vector<string> CatalogParameterNames(const TableFunction &function,
                                             vector<string> positional) {
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+  // DuckDB main lists parameters from the signature. When that list already
+  // covers every type, duckdb_functions() ignores FunctionDescription names.
+  // This fallback matches WithTypedKwargs insertion order in
+  // RegisterCommonDaxNamedParameters, which is also the type order.
+  (void)function;
+  static const char *kNamedOptions[] = {
+      "auth_mode",           "access_token",
+      "secret_name",         "tenant_id",
+      "client_id",           "client_secret",
+      "effective_user_name", "timeout_ms",
+      "schema_probe_rows",   "normalize_dax_column_names"};
+  for (auto *name : kNamedOptions) {
+    positional.emplace_back(name);
+  }
+#else
   if (positional.size() != function.arguments.size()) {
     throw InternalException("pbi_scanner catalog positional names do not match "
                             "the function arguments");
   }
-  // v1.5.6 duckdb_functions() writes parameter_types as the positional
-  // arguments followed by named_parameters in unordered_map iteration order,
-  // then applies FunctionDescription.parameter_names by index. Copy the map the
-  // same way that catalog walk does so each name stays on its type. The
-  // iteration order is not stable across standard libraries, so tests zip names
-  // to types instead of expecting one list. DuckDB main ignores this list when
-  // signature names already match the type count. There, parameters and
-  // parameter_types both follow SetName plus WithTypedKwargs insertion order.
+  // v1.5.6 writes parameter_types as positional arguments, then
+  // named_parameters in unordered_map iteration order, and applies these names
+  // by index. Copy the map the same way that catalog walk does. Iteration order
+  // is not stable across standard libraries, so tests zip names to types
+  // instead of expecting one list.
   TableFunction copied = function;
   for (auto &entry : copied.named_parameters) {
     positional.push_back(entry.first);
   }
+#endif
   return positional;
 }
 
