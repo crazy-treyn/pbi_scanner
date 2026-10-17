@@ -327,7 +327,7 @@ make test-pbi-offline
 ./build/release/pbi_scanner_unit_tests
 ```
 
-DuckDB-Wasm validation (requires Emscripten 3.1.64; see [docs/wasm.md](docs/wasm.md)):
+DuckDB-Wasm validation (requires Emscripten 3.1.71; see [docs/wasm.md](docs/wasm.md)):
 
 ```bash
 make wasm_eh

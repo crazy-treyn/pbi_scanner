@@ -26,7 +26,7 @@ for architecture and rationale.
 
 ### Prerequisites
 
-- Emscripten **3.1.64** (CI uses `mymindstorm/setup-emsdk@v13`)
+- Emscripten **3.1.71** (CI uses `mymindstorm/setup-emsdk@v13`)
 - Node 20+
 - From `test/wasm/`: `npm ci` and `npx playwright install --with-deps chromium`
 - Optional env vars:
