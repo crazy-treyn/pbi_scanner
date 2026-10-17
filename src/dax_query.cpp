@@ -443,6 +443,20 @@ ResolveSchemaProbeRows(const named_parameter_map_t &named_parameters) {
 }
 
 static void RegisterCommonDaxNamedParameters(TableFunction &function) {
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+  function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &kwargs) {
+    kwargs.Add("auth_mode", LogicalType::VARCHAR);
+    kwargs.Add("access_token", LogicalType::VARCHAR);
+    kwargs.Add("secret_name", LogicalType::VARCHAR);
+    kwargs.Add("tenant_id", LogicalType::VARCHAR);
+    kwargs.Add("client_id", LogicalType::VARCHAR);
+    kwargs.Add("client_secret", LogicalType::VARCHAR);
+    kwargs.Add("effective_user_name", LogicalType::VARCHAR);
+    kwargs.Add("timeout_ms", LogicalType::BIGINT);
+    kwargs.Add("schema_probe_rows", LogicalType::BIGINT);
+    kwargs.Add("normalize_dax_column_names", LogicalType::BOOLEAN);
+  });
+#else
   function.named_parameters["auth_mode"] = LogicalType::VARCHAR;
   function.named_parameters["access_token"] = LogicalType::VARCHAR;
   function.named_parameters["secret_name"] = LogicalType::VARCHAR;
@@ -454,6 +468,7 @@ static void RegisterCommonDaxNamedParameters(TableFunction &function) {
   function.named_parameters["schema_probe_rows"] = LogicalType::BIGINT;
   function.named_parameters["normalize_dax_column_names"] =
       LogicalType::BOOLEAN;
+#endif
 }
 
 static bool IsMwcXmlaUnauthorized(const string &xmla_auth_scheme,
@@ -540,15 +555,21 @@ static bool TryRecoverFromProbeFailure(
   return true;
 }
 
-static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
-                                             TableFunctionBindInput &input,
-                                             vector<LogicalType> &return_types,
-                                             vector<string> &names) {
+static unique_ptr<FunctionData>
+DaxQueryBind(ClientContext &context, TableFunctionBindInput &input,
+             vector<LogicalType> &return_types,
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+             vector<Identifier> &names) {
+#else
+             vector<string> &names) {
+#endif
   auto connection_string = input.inputs[0].GetValue<string>();
-  auto dax_text = input.table_function.extra_info;
+  auto dax_text = input.table_function.GetExtraInfo();
   if (dax_text.empty()) {
     dax_text = input.inputs[1].GetValue<string>();
   }
+  auto named_parameters =
+      pbi_compat::CopyBindNamedParameters(input.named_parameters);
 
   auto config = ParsePowerBIConnectionString(connection_string);
   if (PbiIsBrowserPlatform() && !config.is_direct_xmla) {
@@ -566,12 +587,12 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   auto bind_start = std::chrono::steady_clock::now();
   auto access_token_start = std::chrono::steady_clock::now();
   auto power_bi_aad_token =
-      ResolvePowerBIAccessToken(context, config, input.named_parameters);
+      ResolvePowerBIAccessToken(context, config, named_parameters);
   DebugTiming("ResolvePowerBIAccessToken", access_token_start);
   auto effective_user_name =
-      ResolveEffectiveUserName(config, input.named_parameters);
-  auto timeout_ms = ResolveTimeoutMs(config, input.named_parameters);
-  auto schema_probe_rows = ResolveSchemaProbeRows(input.named_parameters);
+      ResolveEffectiveUserName(config, named_parameters);
+  auto timeout_ms = ResolveTimeoutMs(config, named_parameters);
+  auto schema_probe_rows = ResolveSchemaProbeRows(named_parameters);
   PowerBIResolvedTarget target;
   bool target_from_cache = false;
   string xmla_catalog;
@@ -674,7 +695,7 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   }
 
   auto normalize_dax_column_names =
-      ResolveNormalizeDaxColumnNames(context, input.named_parameters);
+      ResolveNormalizeDaxColumnNames(context, named_parameters);
   std::vector<string> raw_column_names;
   raw_column_names.reserve(columns.size());
   for (const auto &column : columns) {
@@ -684,7 +705,11 @@ static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
   auto formatted_names = FormatDaxColumnNamesForDuckDB(
       raw_column_names, normalize_dax_column_names);
   for (auto &name : formatted_names) {
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+    names.push_back(Identifier(std::move(name)));
+#else
     names.push_back(std::move(name));
+#endif
   }
 
   return make_uniq<DaxQueryBindData>(
