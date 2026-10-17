@@ -555,13 +555,13 @@ static bool TryRecoverFromProbeFailure(
   return true;
 }
 
-static unique_ptr<FunctionData>
-DaxQueryBind(ClientContext &context, TableFunctionBindInput &input,
-             vector<LogicalType> &return_types,
+static unique_ptr<FunctionData> DaxQueryBind(ClientContext &context,
+                                             TableFunctionBindInput &input,
+                                             vector<LogicalType> &return_types,
 #ifdef PBI_DUCKDB_MAIN_SIGNATURES
-             vector<Identifier> &names) {
+                                             vector<Identifier> &names) {
 #else
-             vector<string> &names) {
+                                             vector<string> &names) {
 #endif
   auto connection_string = input.inputs[0].GetValue<string>();
   auto dax_text = input.table_function.GetExtraInfo();
@@ -589,8 +589,7 @@ DaxQueryBind(ClientContext &context, TableFunctionBindInput &input,
   auto power_bi_aad_token =
       ResolvePowerBIAccessToken(context, config, named_parameters);
   DebugTiming("ResolvePowerBIAccessToken", access_token_start);
-  auto effective_user_name =
-      ResolveEffectiveUserName(config, named_parameters);
+  auto effective_user_name = ResolveEffectiveUserName(config, named_parameters);
   auto timeout_ms = ResolveTimeoutMs(config, named_parameters);
   auto schema_probe_rows = ResolveSchemaProbeRows(named_parameters);
   PowerBIResolvedTarget target;
