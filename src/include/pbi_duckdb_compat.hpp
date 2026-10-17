@@ -10,6 +10,7 @@
 #endif
 #if __has_include("duckdb/common/optional.hpp")
 #define PBI_DUCKDB_MAIN_SIGNATURES 1
+#include "duckdb/common/types/value.hpp"
 #endif
 #endif
 
