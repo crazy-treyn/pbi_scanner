@@ -36,16 +36,11 @@ static const string kExampleConnectionString =
     "Example%20Workspace;Initial Catalog=example_semantic_model;";
 
 static const vector<string> kNamedOptionNames = {
-    "auth_mode",
-    "access_token",
-    "secret_name",
-    "tenant_id",
-    "client_id",
-    "client_secret",
-    "effective_user_name",
-    "timeout_ms",
-    "schema_probe_rows",
-    "normalize_dax_column_names"};
+    "auth_mode",           "access_token",
+    "secret_name",         "tenant_id",
+    "client_id",           "client_secret",
+    "effective_user_name", "timeout_ms",
+    "schema_probe_rows",   "normalize_dax_column_names"};
 
 static vector<string> CatalogParameterNames(vector<string> positional) {
   positional.insert(positional.end(), kNamedOptionNames.begin(),
@@ -105,19 +100,22 @@ static void LoadInternal(ExtensionLoader &loader) {
       loader, CreatePbiTablesFunction(),
       CatalogParameterNames({"connection_string"}),
       "Returns the tables in a Power BI semantic model by running EVALUATE "
-      "INFO.VIEW.TABLES(). connection_string is positional; named options use :=.",
+      "INFO.VIEW.TABLES(). connection_string is positional; named options use "
+      ":=.",
       ExampleSelect("pbi_tables", ""));
   RegisterDocumentedTableFunction(
       loader, CreatePbiColumnsFunction(),
       CatalogParameterNames({"connection_string"}),
       "Returns the columns in a Power BI semantic model by running EVALUATE "
-      "INFO.VIEW.COLUMNS(). connection_string is positional; named options use :=.",
+      "INFO.VIEW.COLUMNS(). connection_string is positional; named options use "
+      ":=.",
       ExampleSelect("pbi_columns", ""));
   RegisterDocumentedTableFunction(
       loader, CreatePbiMeasuresFunction(),
       CatalogParameterNames({"connection_string"}),
       "Returns the measures in a Power BI semantic model by running EVALUATE "
-      "INFO.VIEW.MEASURES(). connection_string is positional; named options use :=.",
+      "INFO.VIEW.MEASURES(). connection_string is positional; named options "
+      "use :=.",
       ExampleSelect("pbi_measures", ""));
   RegisterDocumentedTableFunction(
       loader, CreatePbiRelationshipsFunction(),
