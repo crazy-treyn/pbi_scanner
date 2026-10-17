@@ -36,31 +36,68 @@ WHERE function_name LIKE '__pbi_scanner_test_%';
 ----
 0
 
-# Catalog metadata is present. Description and example text stay unasserted
-# until the approved copy replaces the registration placeholder.
-query I
-SELECT count(*)
+query T
+SELECT description
 FROM duckdb_functions()
-WHERE function_name = 'dax_query'
-  AND description IS NOT NULL
-  AND len(examples) > 0
-  AND list_contains(categories, 'powerbi')
-  AND parameters[1] = 'connection_string'
-  AND parameters[2] = 'dax_text';
+WHERE function_name = 'dax_query';
 ----
-1
+Runs a DAX statement against a Power BI semantic model or a direct XMLA endpoint and returns the result rows as a table.
+
+query T
+SELECT examples[1]
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+SELECT * FROM dax_query('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;', 'EVALUATE ROW("probe_ok", 1)');
+
+query TT
+SELECT parameters[1], parameters[2]
+FROM duckdb_functions()
+WHERE function_name = 'dax_query';
+----
+connection_string	dax_text
+
+query T
+SELECT description
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_columns', 'pbi_measures', 'pbi_relationships', 'pbi_tables')
+ORDER BY function_name;
+----
+Returns the columns in a Power BI semantic model by running EVALUATE INFO.VIEW.COLUMNS().
+Returns the measures in a Power BI semantic model by running EVALUATE INFO.VIEW.MEASURES().
+Returns the relationships in a Power BI semantic model by running EVALUATE INFO.VIEW.RELATIONSHIPS().
+Returns the tables in a Power BI semantic model by running EVALUATE INFO.VIEW.TABLES().
+
+query T
+SELECT examples[1]
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_columns', 'pbi_measures', 'pbi_relationships', 'pbi_tables')
+ORDER BY function_name;
+----
+SELECT * FROM pbi_columns('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_measures('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_relationships('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+SELECT * FROM pbi_tables('Data Source=powerbi://api.powerbi.com/v1.0/myorg/Example%20Workspace;Initial Catalog=example_semantic_model;');
+
+query T
+SELECT parameters[1]
+FROM duckdb_functions()
+WHERE function_name IN ('pbi_columns', 'pbi_measures', 'pbi_relationships', 'pbi_tables')
+ORDER BY function_name;
+----
+connection_string
+connection_string
+connection_string
+connection_string
 
 query I
 SELECT count(*)
 FROM duckdb_functions()
-WHERE function_name IN ('pbi_tables', 'pbi_columns', 'pbi_measures', 'pbi_relationships')
-  AND description IS NOT NULL
-  AND len(examples) > 0
-  AND list_contains(categories, 'powerbi')
-  AND parameters[1] = 'connection_string'
-  AND NOT list_contains(parameters, 'dax_text');
+WHERE function_name IN ('dax_query', 'pbi_tables', 'pbi_columns', 'pbi_measures', 'pbi_relationships')
+  AND categories = ['powerbi']
+  AND len(examples) = 1;
 ----
-4
+5
 
 statement error
 SELECT *

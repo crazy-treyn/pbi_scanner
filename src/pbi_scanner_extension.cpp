@@ -31,16 +31,32 @@ static void SetPbiScannerAuthMode(ClientContext &context, SetScope scope,
   throw InvalidInputException("unsupported auth_mode \"%s\"", value);
 }
 
-// Description and example strings are placeholders until catalog copy is approved.
+static const string kExampleConnectionString =
+    "Data Source=powerbi://api.powerbi.com/v1.0/myorg/"
+    "Example%20Workspace;Initial Catalog=example_semantic_model;";
+
+static string ExampleSelect(const string &function_name,
+                            const string &dax_literal) {
+  string sql = "SELECT * FROM " + function_name + "('" +
+               kExampleConnectionString + "'";
+  if (!dax_literal.empty()) {
+    sql += ", '" + dax_literal + "'";
+  }
+  sql += ");";
+  return sql;
+}
+
 static void RegisterDocumentedTableFunction(ExtensionLoader &loader,
                                             TableFunction function,
-                                            vector<string> parameter_names) {
+                                            vector<string> parameter_names,
+                                            const string &description_text,
+                                            const string &example) {
   CreateTableFunctionInfo info(std::move(function));
   info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
   FunctionDescription description;
   description.parameter_names = std::move(parameter_names);
-  description.description = "placeholder";
-  description.examples.push_back("SELECT * FROM placeholder");
+  description.description = description_text;
+  description.examples.push_back(example);
   description.categories.push_back("powerbi");
   info.descriptions.push_back(std::move(description));
   loader.RegisterFunction(std::move(info));
@@ -60,16 +76,31 @@ static void LoadInternal(ExtensionLoader &loader) {
       "off; opt in via SET or normalize_dax_column_names)",
       LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
-  RegisterDocumentedTableFunction(loader, CreateDaxQueryFunction(),
-                                  {"connection_string", "dax_text"});
-  RegisterDocumentedTableFunction(loader, CreatePbiTablesFunction(),
-                                  {"connection_string"});
-  RegisterDocumentedTableFunction(loader, CreatePbiColumnsFunction(),
-                                  {"connection_string"});
-  RegisterDocumentedTableFunction(loader, CreatePbiMeasuresFunction(),
-                                  {"connection_string"});
-  RegisterDocumentedTableFunction(loader, CreatePbiRelationshipsFunction(),
-                                  {"connection_string"});
+  RegisterDocumentedTableFunction(
+      loader, CreateDaxQueryFunction(), {"connection_string", "dax_text"},
+      "Runs a DAX statement against a Power BI semantic model or a direct "
+      "XMLA endpoint and returns the result rows as a table.",
+      ExampleSelect("dax_query", "EVALUATE ROW(\"probe_ok\", 1)"));
+  RegisterDocumentedTableFunction(
+      loader, CreatePbiTablesFunction(), {"connection_string"},
+      "Returns the tables in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.TABLES().",
+      ExampleSelect("pbi_tables", ""));
+  RegisterDocumentedTableFunction(
+      loader, CreatePbiColumnsFunction(), {"connection_string"},
+      "Returns the columns in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.COLUMNS().",
+      ExampleSelect("pbi_columns", ""));
+  RegisterDocumentedTableFunction(
+      loader, CreatePbiMeasuresFunction(), {"connection_string"},
+      "Returns the measures in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.MEASURES().",
+      ExampleSelect("pbi_measures", ""));
+  RegisterDocumentedTableFunction(
+      loader, CreatePbiRelationshipsFunction(), {"connection_string"},
+      "Returns the relationships in a Power BI semantic model by running "
+      "EVALUATE INFO.VIEW.RELATIONSHIPS().",
+      ExampleSelect("pbi_relationships", ""));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {
