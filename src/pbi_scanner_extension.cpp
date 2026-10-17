@@ -37,8 +37,8 @@ static const string kExampleConnectionString =
 
 static string ExampleSelect(const string &function_name,
                             const string &dax_literal) {
-  string sql = "SELECT * FROM " + function_name + "('" +
-               kExampleConnectionString + "'";
+  string sql =
+      "SELECT * FROM " + function_name + "('" + kExampleConnectionString + "'";
   if (!dax_literal.empty()) {
     sql += ", '" + dax_literal + "'";
   }
