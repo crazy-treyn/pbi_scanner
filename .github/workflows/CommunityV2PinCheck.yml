@@ -1,0 +1,30 @@
+# Temporary pre-merge check. Not part of the v1.5.6 release.
+# Pins match duckdb/community-extensions .github/workflows/build.yml on main
+# (read 2026-10-17): DuckDB b15358c371daf10dad799a43b6167f6ccdce84d8,
+# extension-ci-tools v2.0-cyanoptera, vcpkg cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+# (the non-v1.5.6 arm of COMMUNITY_EXTENSION_VCPKG_COMMIT).
+# reduced_ci_mode is disabled so this covers the non-excluded platforms that
+# workflow builds on push/workflow_dispatch. A community pull_request with
+# reduced_ci_mode auto would keep only linux_amd64, windows_amd64, and wasm_eh.
+name: Community v2 pin check
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  community-v2-build:
+    name: Build against community v2 pins
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: b15358c371daf10dad799a43b6167f6ccdce84d8
+      duckdb_tag: v2.0.0-alpha46057
+      ci_tools_version: v2.0-cyanoptera
+      reduced_ci_mode: disabled
+      exclude_archs: "wasm_threads;windows_amd64_mingw;osx_amd64"
+      extension_name: pbi_scanner
+      override_repository: crazy-treyn/pbi_scanner
+      override_ref: f4fcc26b3278549c7b79fdc98e4c96493c7f49a0
+      vcpkg_url: https://github.com/microsoft/vcpkg.git
+      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+      skip_tests: false
