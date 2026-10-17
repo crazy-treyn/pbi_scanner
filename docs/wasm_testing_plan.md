@@ -82,7 +82,7 @@ make test-pbi-wasm    # smoke + sqllogictest on wasm_eh (expects artifact alread
 
 Prerequisites: Emscripten **3.1.64**, Node 20+, `npm ci` and Playwright Chromium
 under `test/wasm/`. Pin `@duckdb/duckdb-wasm` to a release whose embedded DuckDB
-version matches the extension (currently **v1.5.3**).
+version matches the extension (currently **v1.5.6**).
 
 ## Sqllogictest Subset
 
