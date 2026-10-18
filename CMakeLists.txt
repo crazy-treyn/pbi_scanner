@@ -78,6 +78,14 @@ if(NOT EMSCRIPTEN)
   # extension loader so Linux linkers resolve ExtensionHelper::LoadAllExtensions.
   target_link_libraries(pbi_scanner_unit_tests duckdb_static)
   link_extension_libraries(pbi_scanner_unit_tests "")
+  # Community v2 (DuckDB b15358c / extension-ci-tools v2.0-cyanoptera) calls
+  # link_extension_libraries while extensions are still being added, before
+  # DUCKDB_STATICALLY_LINKED_EXTENSIONS exists, and has no deferred-link hook.
+  # Current DuckDB main defers that call; v1.5.6 links immediately. Name the
+  # archive only for the v2 gap so those two paths stay unchanged.
+  if(COMMAND duckdb_link_extensions AND NOT COMMAND duckdb_link_deferred_extension_libraries)
+    duckdb_link_extensions(pbi_scanner_unit_tests pbi_scanner)
+  endif()
   target_link_pbi_scanner_deps(pbi_scanner_unit_tests)
 
   add_test(NAME pbi_scanner_unit_tests COMMAND pbi_scanner_unit_tests)

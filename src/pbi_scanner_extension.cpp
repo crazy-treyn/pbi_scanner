@@ -2,10 +2,12 @@
 
 #include "pbi_scanner_extension.hpp"
 #include "dax_query.hpp"
+#include "pbi_duckdb_compat.hpp"
 #include "pbi_scanner_util.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 #include <string>
 
@@ -30,6 +32,72 @@ static void SetPbiScannerAuthMode(ClientContext &context, SetScope scope,
   throw InvalidInputException("unsupported auth_mode \"%s\"", value);
 }
 
+static const string kExampleConnectionString =
+    "Data Source=powerbi://api.powerbi.com/v1.0/myorg/"
+    "Example%20Workspace;Initial Catalog=example_semantic_model;";
+
+static vector<string> CatalogParameterNames(const TableFunction &function,
+                                            vector<string> positional) {
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+  // DuckDB main lists parameters from the signature. When that list already
+  // covers every type, duckdb_functions() ignores FunctionDescription names.
+  // This fallback matches WithTypedKwargs insertion order in
+  // RegisterCommonDaxNamedParameters, which is also the type order.
+  (void)function;
+  static const char *kNamedOptions[] = {
+      "auth_mode",           "access_token",
+      "secret_name",         "tenant_id",
+      "client_id",           "client_secret",
+      "effective_user_name", "timeout_ms",
+      "schema_probe_rows",   "normalize_dax_column_names"};
+  for (auto *name : kNamedOptions) {
+    positional.emplace_back(name);
+  }
+#else
+  if (positional.size() != function.arguments.size()) {
+    throw InternalException("pbi_scanner catalog positional names do not match "
+                            "the function arguments");
+  }
+  // v1.5.6 writes parameter_types as positional arguments, then
+  // named_parameters in unordered_map iteration order, and applies these names
+  // by index. Copy the map the same way that catalog walk does. Iteration order
+  // is not stable across standard libraries, so tests zip names to types
+  // instead of expecting one list.
+  TableFunction copied = function;
+  for (auto &entry : copied.named_parameters) {
+    positional.push_back(entry.first);
+  }
+#endif
+  return positional;
+}
+
+static string ExampleSelect(const string &function_name,
+                            const string &dax_literal) {
+  string sql =
+      "SELECT * FROM " + function_name + "('" + kExampleConnectionString + "'";
+  if (!dax_literal.empty()) {
+    sql += ", '" + dax_literal + "'";
+  }
+  sql += ");";
+  return sql;
+}
+
+static void RegisterDocumentedTableFunction(ExtensionLoader &loader,
+                                            TableFunction function,
+                                            vector<string> parameter_names,
+                                            const string &description_text,
+                                            const string &example) {
+  CreateTableFunctionInfo info(std::move(function));
+  info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+  FunctionDescription description;
+  description.parameter_names = std::move(parameter_names);
+  description.description = description_text;
+  description.examples.push_back(example);
+  description.categories.push_back("powerbi");
+  info.descriptions.push_back(std::move(description));
+  loader.RegisterFunction(std::move(info));
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
   auto &config = loader.GetDatabaseInstance().config;
   config.AddExtensionOption("pbi_scanner_auth_mode",
@@ -44,11 +112,46 @@ static void LoadInternal(ExtensionLoader &loader) {
       "off; opt in via SET or normalize_dax_column_names)",
       LogicalType::BOOLEAN, Value::BOOLEAN(false));
 
-  loader.RegisterFunction(CreateDaxQueryFunction());
-  loader.RegisterFunction(CreatePbiTablesFunction());
-  loader.RegisterFunction(CreatePbiColumnsFunction());
-  loader.RegisterFunction(CreatePbiMeasuresFunction());
-  loader.RegisterFunction(CreatePbiRelationshipsFunction());
+  auto dax_query = CreateDaxQueryFunction();
+  RegisterDocumentedTableFunction(
+      loader, dax_query,
+      CatalogParameterNames(dax_query, {"connection_string", "dax_text"}),
+      "Runs a DAX statement against a Power BI semantic model or a direct "
+      "XMLA endpoint and returns the result rows as a table. "
+      "connection_string and dax_text are positional; named options use :=.",
+      ExampleSelect("dax_query", "EVALUATE ROW(\"probe_ok\", 1)"));
+  auto pbi_tables = CreatePbiTablesFunction();
+  RegisterDocumentedTableFunction(
+      loader, pbi_tables,
+      CatalogParameterNames(pbi_tables, {"connection_string"}),
+      "Returns the tables in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.TABLES(). connection_string is positional; named options use "
+      ":=.",
+      ExampleSelect("pbi_tables", ""));
+  auto pbi_columns = CreatePbiColumnsFunction();
+  RegisterDocumentedTableFunction(
+      loader, pbi_columns,
+      CatalogParameterNames(pbi_columns, {"connection_string"}),
+      "Returns the columns in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.COLUMNS(). connection_string is positional; named options use "
+      ":=.",
+      ExampleSelect("pbi_columns", ""));
+  auto pbi_measures = CreatePbiMeasuresFunction();
+  RegisterDocumentedTableFunction(
+      loader, pbi_measures,
+      CatalogParameterNames(pbi_measures, {"connection_string"}),
+      "Returns the measures in a Power BI semantic model by running EVALUATE "
+      "INFO.VIEW.MEASURES(). connection_string is positional; named options "
+      "use :=.",
+      ExampleSelect("pbi_measures", ""));
+  auto pbi_relationships = CreatePbiRelationshipsFunction();
+  RegisterDocumentedTableFunction(
+      loader, pbi_relationships,
+      CatalogParameterNames(pbi_relationships, {"connection_string"}),
+      "Returns the relationships in a Power BI semantic model by running "
+      "EVALUATE INFO.VIEW.RELATIONSHIPS(). "
+      "connection_string is positional; named options use :=.",
+      ExampleSelect("pbi_relationships", ""));
 }
 
 void PbiScannerExtension::Load(ExtensionLoader &loader) {

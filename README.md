@@ -1,6 +1,6 @@
 # pbi_scanner
 
-DuckDB extension for querying Power BI Semantic Models with DAX.
+DuckDB extension for querying Power BI Semantic Models with DAX. The supported DuckDB release is v1.5.6.
 
 > **Experimental**: This extension is under active development. APIs, behavior, and performance characteristics may change between releases.
 
@@ -120,6 +120,25 @@ Data Source=https://example.analysis.windows.net/xmla?vs=sobe_wowvirtualserver&d
 ```
 
 Use the direct XMLA form when you already have a resolved target and want to bypass public Power BI locator resolution.
+
+### Table function arguments
+
+`connection_string` and `dax_text` are positional. Named options use `:=`:
+
+- `auth_mode`
+- `access_token`
+- `secret_name`
+- `tenant_id`
+- `client_id`
+- `client_secret`
+- `effective_user_name`
+- `timeout_ms`
+- `schema_probe_rows`
+- `normalize_dax_column_names`
+
+`dax_query` takes both positional arguments. `pbi_tables`, `pbi_columns`, `pbi_measures`, and `pbi_relationships` take `connection_string` and the same named options.
+
+`duckdb_functions()` shows each function's description, examples, and parameter names and types.
 
 ### Authentication Modes
 

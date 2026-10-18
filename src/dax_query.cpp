@@ -746,6 +746,14 @@ TableFunction CreateDaxQueryFunction() {
                          {LogicalType::VARCHAR, LogicalType::VARCHAR},
                          DaxQueryExecute, DaxQueryBind, DaxQueryInit);
   RegisterCommonDaxNamedParameters(function);
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+  // duckdb_functions() on DuckDB main prefers signature names over
+  // FunctionDescription.parameter_names. Positional-only names stay
+  // call-by-position; they only replace col0/col1 in the catalog.
+  auto &signature = function.GetSignature();
+  signature.GetParameter(0).SetName(Identifier("connection_string"));
+  signature.GetParameter(1).SetName(Identifier("dax_text"));
+#endif
   return function;
 }
 
@@ -755,6 +763,10 @@ static TableFunction CreateFixedDaxFunction(const string &name,
                          DaxQueryBind, DaxQueryInit);
   function.extra_info = dax_text;
   RegisterCommonDaxNamedParameters(function);
+#ifdef PBI_DUCKDB_MAIN_SIGNATURES
+  function.GetSignature().GetParameter(0).SetName(
+      Identifier("connection_string"));
+#endif
   return function;
 }
 
