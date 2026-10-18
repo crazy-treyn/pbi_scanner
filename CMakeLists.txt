@@ -29,6 +29,11 @@ function(target_link_pbi_scanner_deps target)
       target_compile_definitions(${target} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
       target_link_libraries(${target} ZLIB::ZLIB)
     endif()
+    # Main's httplib loads macOS keychain certs. v1.5.6 does not define that path,
+    # and duckdb_extension_statically_link does not exist there, so its link is unchanged.
+    if(APPLE AND COMMAND duckdb_extension_statically_link)
+      target_link_libraries(${target} "-framework CoreFoundation" "-framework Security")
+    endif()
   endif()
 endfunction()
 

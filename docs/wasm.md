@@ -26,7 +26,7 @@ for architecture and rationale.
 
 ### Prerequisites
 
-- Emscripten **3.1.64** (CI uses `mymindstorm/setup-emsdk@v13`)
+- Emscripten **3.1.71** (CI uses `mymindstorm/setup-emsdk@v13`)
 - Node 20+
 - From `test/wasm/`: `npm ci` and `npx playwright install --with-deps chromium`
 - Optional env vars:
@@ -181,14 +181,15 @@ full live semantic-model proof.
 
 ## DuckDB-Wasm Version Alignment
 
-This extension is built against DuckDB **v1.5.3** (see the `duckdb/` submodule).
+This extension is built against DuckDB **v1.5.6** (see the `duckdb/` submodule).
 The smoke harness pins `@duckdb/duckdb-wasm` in `test/wasm/package.json`
-(currently **1.33.1-dev55.0**, which embeds DuckDB **v1.5.3**). Use a
-DuckDB-Wasm npm release whose embedded DuckDB version matches the extension you
-load; version skew can cause ABI or runtime failures. For example,
-`@duckdb/duckdb-wasm@1.29.0` embeds DuckDB `v1.1.1`, and
-`@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`; neither is suitable for
-testing this `v1.5.3` extension.
+(currently **1.33.1-dev65.0**, which embeds DuckDB **v1.5.6**, submodule
+`069cc9f9b5be802405797faecc284961b07c70ef`). Use a DuckDB-Wasm npm release whose
+embedded DuckDB version matches the extension you load; version skew can cause
+ABI or runtime failures. For example, `@duckdb/duckdb-wasm@1.29.0` embeds
+DuckDB `v1.1.1`, `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`, and
+`@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3`; none of those is
+suitable for testing this `v1.5.6` extension.
 
 When publishing or integrating in a host app, record both:
 

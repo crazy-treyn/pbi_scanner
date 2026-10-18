@@ -7,7 +7,7 @@
     "sqllogictest": "node run_sqllogictest.mjs"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "1.33.1-dev55.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev65.0",
     "apache-arrow": "17.0.0"
   },
   "devDependencies": {

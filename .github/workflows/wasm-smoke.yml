@@ -33,7 +33,7 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v13
         with:
-          version: 3.1.64
+          version: 3.1.71
 
       - name: Build WASM extension
         run: make ${{ matrix.duckdb_platform }}
