@@ -34,19 +34,19 @@
 
 - Build artifacts: `make wasm_eh` (primary) or `make wasm_mvp`; output under
   `build/<platform>/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`.
-- Browser smoke test: `uv run test/wasm/run_pbi_wasm_smoke.py --build` (add
-  `--platform wasm_mvp` for the MVP artifact).
+- Browser smoke test: `uv run test/wasm/run_pbi_wasm_smoke.py --build` on `wasm_eh`.
 - Browser sqllogictest: `uv run test/wasm/run_pbi_wasm_sqllogictest.py --build`
   (runs `wasm_sql/pbi_scanner_wasm.test` in Chromium via DuckDB-Wasm).
 - Convenience target (after `make wasm_eh`): `make test-pbi-wasm` runs smoke plus
   sqllogictest on `wasm_eh`.
-- CI runs `.github/workflows/wasm-smoke.yml` on `wasm_eh` and `wasm_mvp` for
-  every push and pull request (smoke plus `pbi_scanner_wasm.test`).
+- CI runs `.github/workflows/wasm-smoke.yml` on `wasm_eh` for every push and pull
+  request (smoke plus `pbi_scanner_wasm.test`). Emscripten is 6.0.9. The browser
+  host is built from duckdb-wasm `51ee2cc` because npm has no DuckDB 2.0 package.
 - Architecture: [docs/wasm_testing_plan.md](docs/wasm_testing_plan.md); commands
   and limitations: [docs/wasm.md](docs/wasm.md).
 - Browser auth is `access_token` only.
-- On `wasm_mvp`, smoke negative checks and sqllogictest `statement error` records
-  are skipped (DuckDB-Wasm MVP runtime glue hides extension error messages).
+- DuckDB-Wasm 2.0 has no MVP bundle, so browser tests do not run `wasm_mvp`.
+  `make wasm_mvp` can still compile the extension.
 - On Windows, prefer WSL/Linux or CI for Emscripten builds; native Windows uses
   `scripts\dev-win.ps1` for release/unittest only.
 

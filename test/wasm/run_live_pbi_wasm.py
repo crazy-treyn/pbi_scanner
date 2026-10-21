@@ -46,19 +46,26 @@ def _load_local_env_file() -> None:
 
 
 def default_extension(platform: str) -> Path:
-    return (
-        REPO_ROOT
-        / "build"
-        / platform
-        / "extension"
-        / "pbi_scanner"
-        / "pbi_scanner.duckdb_extension.wasm"
-    )
+    return REPO_ROOT / "build" / platform / "extension" / "pbi_scanner" / "pbi_scanner.duckdb_extension.wasm"
 
 
 def run(command: list[str], cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(str(part) for part in command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def reject_unsupported_platform(platform: str) -> None:
+    if platform == "wasm_mvp":
+        raise SystemExit(
+            "DuckDB-Wasm 2.0 has no MVP bundle, so browser tests run on wasm_eh. "
+            "`make wasm_mvp` can still compile the extension."
+        )
+
+
+def ensure_duckdb_wasm_host(env: dict[str, str]) -> None:
+    env.setdefault("OVERRIDE_GIT_DESCRIBE", "v2.0.0")
+    run(["bash", str(WASM_TEST_DIR / "ensure_duckdb_wasm_host.sh")], env=env)
+    env["PBI_DUCKDB_WASM_DIST"] = str(WASM_TEST_DIR / ".duckdb-wasm" / "packages" / "duckdb-wasm" / "dist")
 
 
 def timed(label: str, started_at: float) -> None:
@@ -77,9 +84,7 @@ def bench_config() -> tuple[str, str]:
     connection_string = first_env("PBI_WASM_CONNECTION_STRING", "PBI_BENCH_CONNECTION_STRING")
     dax = first_env("PBI_WASM_DAX", "PBI_BENCH_DAX") or 'EVALUATE ROW("x", 1)'
     if not connection_string:
-        raise SystemExit(
-            "PBI_WASM_CONNECTION_STRING or PBI_BENCH_CONNECTION_STRING is required"
-        )
+        raise SystemExit("PBI_WASM_CONNECTION_STRING or PBI_BENCH_CONNECTION_STRING is required")
     return connection_string, dax
 
 
@@ -106,10 +111,7 @@ def normalize_value(value: Any) -> Any:
 
 
 def canonical_rows(columns: list[str], rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-    return [
-        {column: normalize_value(value) for column, value in zip(columns, row, strict=True)}
-        for row in rows
-    ]
+    return [{column: normalize_value(value) for column, value in zip(columns, row, strict=True)} for row in rows]
 
 
 def parse_connection_string(connection_string: str) -> dict[str, str]:
@@ -299,9 +301,7 @@ def generate_mwc_token(
                     token_url = location
                     continue
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"generate XMLA token failed with HTTP {exc.code}: {detail}"
-            ) from exc
+            raise RuntimeError(f"generate XMLA token failed with HTTP {exc.code}: {detail}") from exc
         except URLError as exc:
             raise RuntimeError(f"generate XMLA token failed: {exc}") from exc
     raise RuntimeError("generate XMLA token redirect limit exceeded")
@@ -424,14 +424,13 @@ def wasm_result(
     env = os.environ.copy()
     env["PBI_WASM_EXTENSION_PATH"] = str(extension)
     env["PBI_WASM_DUCKDB_PLATFORM"] = platform
+    ensure_duckdb_wasm_host(env)
     env["PBI_WASM_CONNECTION_STRING"] = connection_string
     env["PBI_WASM_TARGET_XMLA_URL"] = target_xmla_url
     env["PBI_WASM_DAX"] = dax
     env["PBI_WASM_ACCESS_TOKEN"] = access_token
     result_path = ""
-    result_file = tempfile.NamedTemporaryFile(
-        prefix="pbi_wasm_live_", suffix=".json", delete=False
-    )
+    result_file = tempfile.NamedTemporaryFile(prefix="pbi_wasm_live_", suffix=".json", delete=False)
     result_path = result_file.name
     result_file.close()
     env["PBI_WASM_RESULT_PATH"] = result_path
@@ -474,15 +473,9 @@ def wasm_result(
 
 def compare_results(native: dict[str, Any], wasm: dict[str, Any]) -> None:
     if native["columns"] != wasm["columns"]:
-        raise AssertionError(
-            "column mismatch\n"
-            f"native={native['columns']}\n"
-            f"wasm={wasm['columns']}"
-        )
+        raise AssertionError("column mismatch\n" f"native={native['columns']}\n" f"wasm={wasm['columns']}")
     if native["rowCount"] != wasm["rowCount"]:
-        raise AssertionError(
-            f"row count mismatch: native={native['rowCount']} wasm={wasm['rowCount']}"
-        )
+        raise AssertionError(f"row count mismatch: native={native['rowCount']} wasm={wasm['rowCount']}")
     native_rows = Counter(json.dumps(row, sort_keys=True) for row in native["rows"])
     wasm_rows = Counter(json.dumps(row, sort_keys=True) for row in wasm["rows"])
     if native_rows != wasm_rows:
@@ -496,9 +489,7 @@ def compare_results(native: dict[str, Any], wasm: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run a live Power BI semantic model comparison through DuckDB-Wasm"
-    )
+    parser = argparse.ArgumentParser(description="Run a live Power BI semantic model comparison through DuckDB-Wasm")
     parser.add_argument(
         "--build",
         action="store_true",
@@ -517,12 +508,15 @@ def main() -> None:
         help="path to pbi_scanner.duckdb_extension.wasm",
     )
     args = parser.parse_args()
+    reject_unsupported_platform(args.platform)
 
     _load_local_env_file()
     os.environ.setdefault("PBI_SCANNER_DEBUG_TIMINGS", "1")
 
     if args.build:
-        run(["make", args.platform])
+        build_env = os.environ.copy()
+        build_env.setdefault("OVERRIDE_GIT_DESCRIBE", "v2.0.0")
+        run(["make", args.platform], env=build_env)
 
     extension = (args.extension or default_extension(args.platform)).resolve()
     if not extension.exists():
@@ -560,8 +554,7 @@ def main() -> None:
 
     compare_results(native, wasm)
     print(
-        "pbi_scanner live WASM semantic model comparison passed "
-        f"(platform={args.platform}, rows={wasm['rowCount']})"
+        "pbi_scanner live WASM semantic model comparison passed " f"(platform={args.platform}, rows={wasm['rowCount']})"
     )
 
 

@@ -29,13 +29,9 @@ export function sqllogictestBrowserModuleScript() {
 
       async function createSession(config) {
         const bundles = {
-          mvp: {
-            mainModule: "/duckdb/duckdb-mvp.wasm",
-            mainWorker: "/duckdb/duckdb-browser-mvp.worker.js",
-          },
-          eh: {
-            mainModule: "/duckdb/duckdb-eh.wasm",
-            mainWorker: "/duckdb/duckdb-browser-eh.worker.js",
+          base: {
+            mainModule: "/duckdb/duckdb-base.wasm",
+            mainWorker: "/duckdb/duckdb-browser-base.worker.js",
           },
         };
         const bundle = bundles[config.bundleKey];

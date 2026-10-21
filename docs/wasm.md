@@ -1,9 +1,10 @@
 # DuckDB-Wasm Support
 
 `pbi_scanner` can be built as a DuckDB-Wasm loadable extension for the non-threaded
-`wasm_mvp` and `wasm_eh` platforms. The threaded `wasm_threads` platform remains
-excluded until the browser test harness covers COOP/COEP and pthread-specific
-deployment requirements.
+`wasm_eh` platform. `make wasm_mvp` still compiles an extension, but DuckDB-Wasm
+2.0 has no MVP host bundle, so browser tests do not load it. The threaded
+`wasm_threads` platform remains excluded until the browser test harness covers
+COOP/COEP and pthread-specific deployment requirements.
 
 ## Build
 
@@ -26,13 +27,17 @@ for architecture and rationale.
 
 ### Prerequisites
 
-- Emscripten **3.1.71** (CI uses `mymindstorm/setup-emsdk@v13`)
-- Node 20+
+- Emscripten **6.0.9** (CI uses `emscripten-core/setup-emsdk` v16, same pin as extension-ci-tools)
+- Node 20+, Yarn Classic 1.22 when building the local DuckDB-Wasm host, `ccache`
 - From `test/wasm/`: `npm ci` and `npx playwright install --with-deps chromium`
+- `bash test/wasm/ensure_duckdb_wasm_host.sh` builds the matching browser host
+  (the Python runners call it)
 - Optional env vars:
   - `PBI_WASM_EXTENSION_PATH` — path to `pbi_scanner.duckdb_extension.wasm`
     (default: `build/wasm_eh/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm`)
-  - `PBI_WASM_DUCKDB_PLATFORM` — `wasm_eh` or `wasm_mvp` (default: `wasm_eh`)
+  - `PBI_WASM_DUCKDB_PLATFORM` — `wasm_eh` (default). `wasm_mvp` is rejected by the browser runners.
+  - `PBI_DUCKDB_WASM_DIST` — directory with `duckdb-browser.mjs` and `duckdb-base.wasm`
+    (default: the dist produced by `ensure_duckdb_wasm_host.sh`)
 
 After `make wasm_eh`, a convenience target runs both layers:
 
@@ -46,7 +51,6 @@ Run the credential-free end-to-end smoke with:
 
 ```bash
 uv run test/wasm/run_pbi_wasm_smoke.py --build
-uv run test/wasm/run_pbi_wasm_smoke.py --build --platform wasm_mvp
 ```
 
 The smoke harness (`test/wasm/smoke.mjs`) starts Playwright/Chromium, serves
@@ -66,17 +70,11 @@ FROM dax_query(
 
 The test passes only if the query returns `probe_ok = 1`, the mock server sees
 the expected `Authorization` header, and unsupported browser paths fail with clear
-errors on `wasm_eh`:
+errors:
 
 - `auth_mode := 'azure_cli'`
 - `auth_mode := 'service_principal'` with explicit credentials
 - `powerbi://` locators at bind time
-
-The `wasm_mvp` smoke validates the same extension load, function registration,
-`dax_query`, XMLA parsing, and access-token header path, but skips the negative
-error-message assertions. In the current DuckDB-Wasm MVP runtime, deliberate
-validation errors surface as runtime glue errors instead of the extension's
-`InvalidInputException` messages.
 
 The mock XMLA endpoint is intentionally same-origin with the browser page. The
 WASM HTTP client uses synchronous browser XHR; Chromium blocks synchronous
@@ -91,7 +89,6 @@ Run offline SQL assertions against DuckDB-Wasm with:
 
 ```bash
 uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
-uv run test/wasm/run_pbi_wasm_sqllogictest.py --build --platform wasm_mvp
 ```
 
 The sqllogictest harness (`test/wasm/run_sqllogictest.mjs`) uses the same browser
@@ -109,13 +106,14 @@ Supported directives: `query`, `statement ok`, `statement error`, `require`.
 Unsupported sqllogictest features (`loop`, `foreach`, hash results, multiple
 connections, etc.) are out of scope.
 
-On `wasm_mvp`, `statement error` records are skipped (same MVP runtime limitation
-as smoke negative checks). `wasm_eh` runs the full WASM sqllogictest file.
+`wasm_eh` runs the full WASM sqllogictest file, including `statement error` records.
 
 ### CI
 
-GitHub Actions runs smoke and sqllogictest for both `wasm_eh` and `wasm_mvp` via
-`.github/workflows/wasm-smoke.yml` on every push and pull request.
+GitHub Actions runs smoke and sqllogictest for `wasm_eh` via
+`.github/workflows/wasm-smoke.yml` on every push and pull request. The job uses
+Emscripten 6.0.9 and builds the DuckDB-Wasm host with
+`test/wasm/ensure_duckdb_wasm_host.sh`. There is no `wasm_mvp` browser job.
 
 ## Optional Live Semantic Model Test
 
@@ -174,22 +172,18 @@ the native baseline extension is missing. If the DAX query has nondeterministic
 row ordering, add an `ORDER BY` in the DAX query before relying on full row-by-row
 comparison.
 
-The live helper targets `wasm_eh` by default. `wasm_mvp` can be selected with
-`--platform wasm_mvp`, but large live queries may currently fail in
-DuckDB-Wasm's MVP runtime with `_setThrew is not defined`; use `wasm_eh` for the
-full live semantic-model proof.
+The live helper targets `wasm_eh`. `--platform wasm_mvp` is rejected because
+DuckDB-Wasm 2.0 has no MVP bundle.
 
 ## DuckDB-Wasm Version Alignment
 
-This extension is built against DuckDB **v1.5.6** (see the `duckdb/` submodule).
-The smoke harness pins `@duckdb/duckdb-wasm` in `test/wasm/package.json`
-(currently **1.33.1-dev65.0**, which embeds DuckDB **v1.5.6**, submodule
-`069cc9f9b5be802405797faecc284961b07c70ef`). Use a DuckDB-Wasm npm release whose
-embedded DuckDB version matches the extension you load; version skew can cause
-ABI or runtime failures. For example, `@duckdb/duckdb-wasm@1.29.0` embeds
-DuckDB `v1.1.1`, `@duckdb/duckdb-wasm@1.32.0` embeds DuckDB `v1.4.3`, and
-`@duckdb/duckdb-wasm@1.33.1-dev55.0` embeds DuckDB `v1.5.3`; none of those is
-suitable for testing this `v1.5.6` extension.
+This extension is built against DuckDB **v2.0.0** (see the `duckdb/` submodule).
+npm `@duckdb/duckdb-wasm` has no 2.0.0 release. The newest published tag,
+`1.33.1-dev65.0`, embeds DuckDB **v1.5.6** and cannot `LOAD` this extension.
+Browser tests build duckdb-wasm commit `51ee2cc4e22e1e4c9f6038cde755da5f51c9ee0a`,
+which pins DuckDB `d54cbbe3df17e8e5ce68312f483b4155836112aa` and ships the EH
+`base` bundle (`duckdb-base.wasm`, `duckdb-browser-base.worker.js`). Version
+skew between that host and the extension fails inside the worker.
 
 When publishing or integrating in a host app, record both:
 
@@ -276,8 +270,8 @@ the single-threaded sync path while a request is blocked.
 
 ## Current Limitations
 
-- `wasm_mvp` and `wasm_eh` use a synchronous pull execution path rather than the
-  native background producer thread.
+- `wasm_eh` uses a synchronous pull execution path rather than the native
+  background producer thread. `wasm_mvp` is not loaded in the browser.
 - `powerbi://` locators fail at bind time in the browser; use direct XMLA URLs or
   a host-provided proxy for Power BI REST resolution.
 - The first WASM HTTP implementation buffers each HTTP response before invoking

@@ -131,7 +131,12 @@ ExecuteWasmHttpRequest(HttpClient &client, const string &method,
         var headers = UTF8ToString($2);
         var bodyPtr = $3;
         var bodyLen = $4;
+        // Emscripten 4+ passes int64_t into EM_ASM as BigInt. XMLHttpRequest.timeout
+        // is a Web IDL unsigned long and throws if it is given a BigInt.
         var timeoutMs = $5;
+        if (typeof timeoutMs === "bigint") {
+          timeoutMs = Number(timeoutMs);
+        }
         var stopPtr = $6;
         var clientId = $7;
 

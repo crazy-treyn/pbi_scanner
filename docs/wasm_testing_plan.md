@@ -12,7 +12,7 @@ entry points are in [AGENTS.md](../AGENTS.md).
 
 | Layer | Harness | What it proves |
 |-------|---------|----------------|
-| **Browser smoke** | `test/wasm/smoke.mjs` | `INSTALL`/`LOAD`, function registration, same-origin mock XMLA HTTP, auth header propagation, XMLA parse/result materialization, and (`wasm_eh` only) native-only path rejection |
+| **Browser smoke** | `test/wasm/smoke.mjs` | `INSTALL`/`LOAD`, function registration, same-origin mock XMLA HTTP, auth header propagation, XMLA parse/result materialization, and native-only path rejection |
 | **Browser sqllogictest** | `test/wasm/run_sqllogictest.mjs` | Offline SQL assertions from `wasm_sql/pbi_scanner_wasm.test` — validation errors, WASM auth restrictions, `powerbi://` bind rejection — without live Power BI |
 
 Both run DuckDB-Wasm inside Chromium via Playwright. Node only serves assets and
@@ -43,12 +43,13 @@ When changing user-visible error text:
 
 `.github/workflows/wasm-smoke.yml` on every push/PR:
 
-1. Build `wasm_eh` or `wasm_mvp` (matrix leg)
-2. Run browser smoke
-3. Run browser sqllogictest against `pbi_scanner_wasm.test`
+1. Build `wasm_eh` with Emscripten 6.0.9
+2. Build the matching DuckDB-Wasm host (`test/wasm/ensure_duckdb_wasm_host.sh`)
+3. Run browser smoke
+4. Run browser sqllogictest against `pbi_scanner_wasm.test`
 
-Distribution CI still builds and uploads both WASM artifacts via the main
-extension pipeline.
+There is no `wasm_mvp` browser leg. DuckDB-Wasm 2.0 ships only the EH `base`
+bundle. Distribution CI still builds `wasm_eh` on the reduced matrix.
 
 ## Platform Notes
 
@@ -56,16 +57,13 @@ extension pipeline.
 
 - Full smoke coverage including negative auth/locator checks
 - All sqllogictest records run (queries + `statement error`)
+- Browser host bundle is `duckdb-base.wasm` plus `duckdb-browser-base.worker.js`
 
 ### `wasm_mvp`
 
-- Smoke success path only; negative error-message checks skipped
-- Sqllogictest skips `statement error` records — deliberate
-  `InvalidInputException` messages currently surface as DuckDB-Wasm MVP runtime
-  glue errors (`_setThrew is not defined`) instead of extension text
-
-Use `wasm_eh` for functional proof; keep `wasm_mvp` in CI as a compile/load
-regression leg.
+DuckDB-Wasm 2.0 dropped the MVP bundle (`-fwasm-exceptions` is always on). The
+browser runners reject `--platform wasm_mvp`. `make wasm_mvp` can still compile
+the extension; nothing in this harness can load it.
 
 ### `wasm_threads`
 
@@ -80,9 +78,10 @@ uv run test/wasm/run_pbi_wasm_sqllogictest.py --build
 make test-pbi-wasm    # smoke + sqllogictest on wasm_eh (expects artifact already built)
 ```
 
-Prerequisites: Emscripten **3.1.71**, Node 20+, `npm ci` and Playwright Chromium
-under `test/wasm/`. Pin `@duckdb/duckdb-wasm` to a release whose embedded DuckDB
-version matches the extension (currently **v1.5.6**).
+Prerequisites: Emscripten **6.0.9**, Node 20+, `ccache`, Yarn Classic 1.22,
+`npm ci`, and Playwright Chromium under `test/wasm/`. The host is duckdb-wasm
+`51ee2cc` (DuckDB v2.0.0). npm `@duckdb/duckdb-wasm@1.33.1-dev65.0` is DuckDB
+v1.5.6 and cannot load this extension.
 
 ## Sqllogictest Subset
 

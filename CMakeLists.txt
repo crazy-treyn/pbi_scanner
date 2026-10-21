@@ -29,10 +29,12 @@ function(target_link_pbi_scanner_deps target)
       target_compile_definitions(${target} PRIVATE CPPHTTPLIB_ZLIB_SUPPORT)
       target_link_libraries(${target} ZLIB::ZLIB)
     endif()
-    # Main's httplib loads macOS keychain certs. v1.5.6 does not define that path,
-    # and duckdb_extension_statically_link does not exist there, so its link is unchanged.
+    # Main's httplib loads macOS keychain certs. v1.5.6 does not define that
+    # path, and duckdb_extension_statically_link does not exist there, so its
+    # link is unchanged.
     if(APPLE AND COMMAND duckdb_extension_statically_link)
-      target_link_libraries(${target} "-framework CoreFoundation" "-framework Security")
+      target_link_libraries(${target} "-framework CoreFoundation"
+                            "-framework Security")
     endif()
   endif()
 endfunction()
@@ -52,8 +54,7 @@ set(EXTENSION_SOURCES
     src/xmla_util.cpp
     src/xmla_value.cpp
     src/xpress.cpp
-    src/xmla.cpp
-)
+    src/xmla.cpp)
 
 list(APPEND EXTENSION_SOURCES src/http_client_common.cpp)
 if(EMSCRIPTEN)
@@ -70,12 +71,14 @@ target_link_pbi_scanner_deps(${LOADABLE_EXTENSION_NAME})
 
 if(NOT EMSCRIPTEN)
   add_executable(pbi_scanner_unit_tests test/cpp/pbi_scanner_unit_tests.cpp)
-  set_target_properties(pbi_scanner_unit_tests PROPERTIES
-                        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-  target_include_directories(pbi_scanner_unit_tests PRIVATE
-                             ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/catch)
-  # Match duckdb/test/CMakeLists.txt link order: duckdb_static before the generated
-  # extension loader so Linux linkers resolve ExtensionHelper::LoadAllExtensions.
+  set_target_properties(pbi_scanner_unit_tests
+                        PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+  target_include_directories(
+    pbi_scanner_unit_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/catch)
+  # Match duckdb/test/CMakeLists.txt link order: duckdb_static before the
+  # generated extension loader so Linux linkers resolve
+  # ExtensionHelper::LoadAllExtensions.
   target_link_libraries(pbi_scanner_unit_tests duckdb_static)
   link_extension_libraries(pbi_scanner_unit_tests "")
   # Community v2 (DuckDB b15358c / extension-ci-tools v2.0-cyanoptera) calls
@@ -83,7 +86,8 @@ if(NOT EMSCRIPTEN)
   # DUCKDB_STATICALLY_LINKED_EXTENSIONS exists, and has no deferred-link hook.
   # Current DuckDB main defers that call; v1.5.6 links immediately. Name the
   # archive only for the v2 gap so those two paths stay unchanged.
-  if(COMMAND duckdb_link_extensions AND NOT COMMAND duckdb_link_deferred_extension_libraries)
+  if(COMMAND duckdb_link_extensions
+     AND NOT COMMAND duckdb_link_deferred_extension_libraries)
     duckdb_link_extensions(pbi_scanner_unit_tests pbi_scanner)
   endif()
   target_link_pbi_scanner_deps(pbi_scanner_unit_tests)
