@@ -1,6 +1,6 @@
 # pbi_scanner
 
-DuckDB extension for querying Power BI Semantic Models with DAX. The supported DuckDB release is v1.5.6.
+DuckDB extension for querying Power BI Semantic Models with DAX. The supported DuckDB release is v2.0.0.
 
 > **Experimental**: This extension is under active development. APIs, behavior, and performance characteristics may change between releases.
 
