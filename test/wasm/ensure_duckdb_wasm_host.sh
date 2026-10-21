@@ -49,10 +49,14 @@ if [[ ! -d "$DEST/.git" ]]; then
 	git clone --filter=blob:none --no-checkout https://github.com/duckdb/duckdb-wasm.git "$DEST"
 fi
 
-head="$(git -C "$DEST" rev-parse HEAD 2>/dev/null || true)"
-if [[ "$head" != "$PIN" ]]; then
-	git -C "$DEST" fetch --depth 1 origin "$PIN"
-	git -C "$DEST" checkout --detach --force FETCH_HEAD
+# clone --no-checkout leaves the worktree empty even when HEAD is already the
+# default-branch tip. That tip is this pin, so a HEAD check would skip checkout
+# and make apply_patches would find no Makefile.
+git -C "$DEST" fetch --depth 1 origin "$PIN"
+git -C "$DEST" checkout --detach --force FETCH_HEAD
+if [[ ! -f "$DEST/Makefile" ]]; then
+	echo "duckdb-wasm checkout is missing Makefile" >&2
+	exit 1
 fi
 
 bindings="$DEST/packages/duckdb-wasm/src/bindings"
