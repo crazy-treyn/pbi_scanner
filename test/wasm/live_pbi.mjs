@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
+import { bundleKeyForPlatform, duckdbDistDir } from "./browser_harness.mjs";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -55,17 +56,6 @@ function listen(server) {
       resolveListen(server.address().port);
     });
   });
-}
-
-function bundleKeyForPlatform() {
-  const platform = process.env.PBI_WASM_DUCKDB_PLATFORM;
-  if (platform === "wasm_mvp") {
-    return "mvp";
-  }
-  if (platform === "wasm_eh" || !platform) {
-    return "eh";
-  }
-  throw new Error(`unsupported PBI_WASM_DUCKDB_PLATFORM: ${platform}`);
 }
 
 function normalizeValue(value) {
@@ -129,7 +119,7 @@ function patchDuckDbMvpWorker(source) {
 }
 
 async function startLiveServer() {
-  const duckdbDist = dirname(require.resolve("@duckdb/duckdb-wasm"));
+  const duckdbDist = duckdbDistDir();
   const arrowDist = dirname(require.resolve("apache-arrow"));
   const flatbuffersDist = dirname(dirname(require.resolve("flatbuffers")));
   const tslibDist = dirname(require.resolve("tslib"));
@@ -164,13 +154,9 @@ async function startLiveServer() {
 
       window.runLivePbi = async (config) => {
         const bundles = {
-          mvp: {
-            mainModule: "/duckdb/duckdb-mvp.wasm",
-            mainWorker: "/duckdb/duckdb-browser-mvp.worker.js",
-          },
-          eh: {
-            mainModule: "/duckdb/duckdb-eh.wasm",
-            mainWorker: "/duckdb/duckdb-browser-eh.worker.js",
+          base: {
+            mainModule: "/duckdb/duckdb-base.wasm",
+            mainWorker: "/duckdb/duckdb-browser-base.worker.js",
           },
         };
         const bundle = bundles[config.bundleKey];

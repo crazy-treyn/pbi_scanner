@@ -16,7 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        duckdb_platform: [wasm_eh, wasm_mvp]
+        # DuckDB-Wasm 2.0 dropped the MVP bundle. Browser smoke loads wasm_eh only.
+        duckdb_platform: [wasm_eh]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,12 +32,22 @@ jobs:
           cache-dependency-path: test/wasm/package-lock.json
 
       - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v13
+        uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
-          version: 3.1.71
+          version: 6.0.9
+
+      - name: Install host build tools
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ccache
 
       - name: Build WASM extension
+        env:
+          OVERRIDE_GIT_DESCRIBE: v2.0.0
         run: make ${{ matrix.duckdb_platform }}
+
+      - name: Build DuckDB-Wasm host
+        env:
+          OVERRIDE_GIT_DESCRIBE: v2.0.0
+        run: bash test/wasm/ensure_duckdb_wasm_host.sh
 
       - name: Install WASM smoke dependencies
         run: npm ci
@@ -50,6 +61,7 @@ jobs:
         env:
           PBI_WASM_EXTENSION_PATH: build/${{ matrix.duckdb_platform }}/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm
           PBI_WASM_DUCKDB_PLATFORM: ${{ matrix.duckdb_platform }}
+          PBI_DUCKDB_WASM_DIST: ${{ github.workspace }}/test/wasm/.duckdb-wasm/packages/duckdb-wasm/dist
         run: node smoke.mjs
         working-directory: test/wasm
 
@@ -57,5 +69,6 @@ jobs:
         env:
           PBI_WASM_EXTENSION_PATH: build/${{ matrix.duckdb_platform }}/extension/pbi_scanner/pbi_scanner.duckdb_extension.wasm
           PBI_WASM_DUCKDB_PLATFORM: ${{ matrix.duckdb_platform }}
+          PBI_DUCKDB_WASM_DIST: ${{ github.workspace }}/test/wasm/.duckdb-wasm/packages/duckdb-wasm/dist
         run: node run_sqllogictest.mjs --test ../../wasm_sql/pbi_scanner_wasm.test
         working-directory: test/wasm

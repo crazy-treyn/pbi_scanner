@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
 
@@ -36,13 +36,29 @@ export function getExtensionPath() {
 
 export function bundleKeyForPlatform() {
   const platform = process.env.PBI_WASM_DUCKDB_PLATFORM;
-  if (platform === "wasm_mvp") {
-    return "mvp";
-  }
   if (platform === "wasm_eh" || !platform) {
-    return "eh";
+    return "base";
+  }
+  if (platform === "wasm_mvp") {
+    throw new Error(
+      "DuckDB-Wasm 2.0 has no MVP bundle. Browser tests run on wasm_eh (duckdb-base.wasm).",
+    );
   }
   throw new Error(`unsupported PBI_WASM_DUCKDB_PLATFORM: ${platform}`);
+}
+
+export function duckdbDistDir() {
+  if (process.env.PBI_DUCKDB_WASM_DIST) {
+    return resolve(process.env.PBI_DUCKDB_WASM_DIST);
+  }
+  const built = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    ".duckdb-wasm/packages/duckdb-wasm/dist",
+  );
+  if (existsSync(resolve(built, "duckdb-browser.mjs"))) {
+    return built;
+  }
+  return dirname(require.resolve("@duckdb/duckdb-wasm"));
 }
 
 export function corsHeaders(extra = {}) {
@@ -101,7 +117,7 @@ export function patchDuckDbMvpWorker(source) {
 
 export async function startBrowserAssetServer({ pageTitle, pageModuleScript }) {
   const extensionPath = getExtensionPath();
-  const duckdbDist = dirname(require.resolve("@duckdb/duckdb-wasm"));
+  const duckdbDist = duckdbDistDir();
   const arrowDist = dirname(require.resolve("apache-arrow"));
   const flatbuffersDist = dirname(dirname(require.resolve("flatbuffers")));
   const tslibDist = dirname(require.resolve("tslib"));

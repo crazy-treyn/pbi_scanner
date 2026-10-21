@@ -7,20 +7,29 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WASM_TEST_DIR = REPO_ROOT / "test" / "wasm"
+
+
 def default_extension(platform: str) -> Path:
-    return (
-        REPO_ROOT
-        / "build"
-        / platform
-        / "extension"
-        / "pbi_scanner"
-        / "pbi_scanner.duckdb_extension.wasm"
-    )
+    return REPO_ROOT / "build" / platform / "extension" / "pbi_scanner" / "pbi_scanner.duckdb_extension.wasm"
 
 
 def run(command, cwd=REPO_ROOT, env=None):
     print("+ " + " ".join(str(part) for part in command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def reject_unsupported_platform(platform: str) -> None:
+    if platform == "wasm_mvp":
+        raise SystemExit(
+            "DuckDB-Wasm 2.0 has no MVP bundle, so browser tests run on wasm_eh. "
+            "`make wasm_mvp` can still compile the extension."
+        )
+
+
+def ensure_duckdb_wasm_host(env: dict[str, str]) -> None:
+    env.setdefault("OVERRIDE_GIT_DESCRIBE", "v2.0.0")
+    run(["bash", str(WASM_TEST_DIR / "ensure_duckdb_wasm_host.sh")], env=env)
+    env["PBI_DUCKDB_WASM_DIST"] = str(WASM_TEST_DIR / ".duckdb-wasm" / "packages" / "duckdb-wasm" / "dist")
 
 
 def main():
@@ -43,9 +52,12 @@ def main():
         help="path to pbi_scanner.duckdb_extension.wasm",
     )
     args = parser.parse_args()
+    reject_unsupported_platform(args.platform)
 
+    env = os.environ.copy()
     if args.build:
-        run(["make", args.platform])
+        env.setdefault("OVERRIDE_GIT_DESCRIBE", "v2.0.0")
+        run(["make", args.platform], env=env)
 
     extension = (args.extension or default_extension(args.platform)).resolve()
 
@@ -58,9 +70,9 @@ def main():
     if not (WASM_TEST_DIR / "node_modules").exists():
         run(["npm", "ci"], cwd=WASM_TEST_DIR)
 
-    env = os.environ.copy()
     env["PBI_WASM_EXTENSION_PATH"] = str(extension)
     env["PBI_WASM_DUCKDB_PLATFORM"] = args.platform
+    ensure_duckdb_wasm_host(env)
     run(["npm", "run", "smoke"], cwd=WASM_TEST_DIR, env=env)
 
 
