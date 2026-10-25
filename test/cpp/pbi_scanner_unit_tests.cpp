@@ -493,8 +493,8 @@ TEST_CASE("XMLA binds omitted cells by name not position", "[xmla]") {
   auto bound = ParseXmlaChunksForTesting({kBlankFirstRowSchemaXml}, true);
   REQUIRE(bound.columns.size() == 3);
 
-  auto parsed =
-      ParseXmlaChunksForTesting({kShiftedCompactCellsXml}, false, &bound.columns);
+  auto parsed = ParseXmlaChunksForTesting({kShiftedCompactCellsXml}, false,
+                                          &bound.columns);
   REQUIRE(parsed.rows.size() == 2);
   REQUIRE(parsed.rows[0].size() == bound.columns.size());
   REQUIRE(parsed.rows[1].size() == bound.columns.size());

@@ -2018,10 +2018,14 @@ private:
   }
 
   ParserState CaptureState() const {
-    return ParserState{offset,         strings,
-                       names,          names_by_id,
-                       stack,          current_row,
-                       inside_schema,  produced_rows,
+    return ParserState{offset,
+                       strings,
+                       names,
+                       names_by_id,
+                       stack,
+                       current_row,
+                       inside_schema,
+                       produced_rows,
                        cell_trace_count,
                        pending_name_id,
                        pending_start,
