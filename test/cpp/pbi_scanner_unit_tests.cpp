@@ -363,3 +363,145 @@ TEST_CASE("Resolve normalize dax column names setting", "[dax_column_names]") {
   override_off["normalize_dax_column_names"] = Value::BOOLEAN(false);
   REQUIRE(!ResolveNormalizeDaxColumnNames(context, override_off));
 }
+
+// v is blank on row 1 only. w is blank on every row. Cells use C0/C1/C2 while
+// the rowset schema publishes the DAX names via sql:field.
+static const char *kBlankFirstRowSchemaXml = R"XML(<?xml version="1.0"?>
+<root xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:sql="urn:schemas-microsoft-com:xml-sql">
+  <xsd:schema>
+    <xsd:complexType name="row">
+      <xsd:sequence>
+        <xsd:element name="C0" sql:field="[k]" type="xsd:long" minOccurs="0"/>
+        <xsd:element name="C1" sql:field="[v]" type="xsd:string" minOccurs="0"/>
+        <xsd:element name="C2" sql:field="[w]" type="xsd:long" minOccurs="0"/>
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:schema>
+  <row><C0>1</C0></row>
+  <row><C0>2</C0><C1>x</C1></row>
+</root>
+)XML";
+
+static const char *kBlankFirstRowNoSchemaXml = R"XML(<?xml version="1.0"?>
+<root>
+  <row><k>1</k></row>
+  <row><k>2</k><v>x</v></row>
+</root>
+)XML";
+
+static const char *kNamedSchemaBlankFirstRowXml = R"XML(<?xml version="1.0"?>
+<root xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <xsd:schema>
+    <xsd:complexType name="row">
+      <xsd:sequence>
+        <xsd:element name="k" type="xsd:long" minOccurs="0"/>
+        <xsd:element name="v" type="xsd:string" minOccurs="0"/>
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:schema>
+  <row><k>1</k></row>
+  <row><k>2</k><v>x</v></row>
+</root>
+)XML";
+
+static const char *kShiftedCompactCellsXml = R"XML(<?xml version="1.0"?>
+<root>
+  <row><C1>x</C1></row>
+  <row><C0>2</C0><C1>y</C1></row>
+</root>
+)XML";
+
+TEST_CASE("XMLA schema keeps columns blank in the first row", "[xmla]") {
+  auto probed = ParseXmlaChunksForTesting({kBlankFirstRowSchemaXml}, true);
+  REQUIRE(probed.columns.size() == 3);
+  REQUIRE(probed.columns[0].name == "[k]");
+  REQUIRE(probed.columns[1].name == "[v]");
+  REQUIRE(probed.columns[2].name == "[w]");
+  REQUIRE(probed.columns[0].duckdb_type == LogicalType::BIGINT);
+  REQUIRE(probed.columns[1].duckdb_type == LogicalType::VARCHAR);
+  REQUIRE(probed.columns[2].duckdb_type == LogicalType::BIGINT);
+
+  auto parsed = ParseXmlaChunksForTesting({kBlankFirstRowSchemaXml}, false);
+  REQUIRE(parsed.columns.size() == 3);
+  REQUIRE(parsed.rows.size() == 2);
+  REQUIRE(parsed.rows[0].size() == 3);
+  REQUIRE(parsed.rows[0][0].ToString() == "1");
+  REQUIRE(parsed.rows[0][1].IsNull());
+  REQUIRE(parsed.rows[0][2].IsNull());
+  REQUIRE(parsed.rows[1].size() == 3);
+  REQUIRE(parsed.rows[1][0].ToString() == "2");
+  REQUIRE(parsed.rows[1][1].ToString() == "x");
+  REQUIRE(parsed.rows[1][2].IsNull());
+}
+
+TEST_CASE("XMLA schema keeps a column blank in every row", "[xmla]") {
+  auto parsed = ParseXmlaChunksForTesting({kBlankFirstRowSchemaXml}, false);
+  REQUIRE(parsed.columns.size() == 3);
+  REQUIRE(parsed.columns[2].name == "[w]");
+  REQUIRE(parsed.rows.size() == 2);
+  REQUIRE(parsed.rows[0][2].IsNull());
+  REQUIRE(parsed.rows[1][2].IsNull());
+}
+
+TEST_CASE("XMLA infers columns blank only in the first row", "[xmla]") {
+  auto probed = ParseXmlaChunksForTesting({kBlankFirstRowNoSchemaXml}, true);
+  REQUIRE(probed.columns.size() == 2);
+  REQUIRE(probed.columns[0].name == "k");
+  REQUIRE(probed.columns[1].name == "v");
+  REQUIRE(probed.rows.size() == 2);
+  REQUIRE(probed.rows[0].size() == 2);
+  REQUIRE(probed.rows[0][1].IsNull());
+  REQUIRE(probed.rows[1][1].ToString() == "x");
+
+  auto parsed = ParseXmlaChunksForTesting({kBlankFirstRowNoSchemaXml}, false);
+  REQUIRE(parsed.columns.size() == 2);
+  REQUIRE(parsed.rows.size() == 2);
+  REQUIRE(parsed.rows[0].size() == parsed.columns.size());
+  REQUIRE(parsed.rows[1].size() == parsed.columns.size());
+  REQUIRE(parsed.rows[0][1].IsNull());
+  REQUIRE(parsed.rows[1][0].ToString() == "2");
+  REQUIRE(parsed.rows[1][1].ToString() == "x");
+}
+
+TEST_CASE("XMLA blank cells do not mismatch bound schema", "[xmla]") {
+  // Previously the probe locked onto row 1 (column k only) while execution of
+  // the same shape produced 2-wide rows and dax_query threw
+  // "XMLA row column count (2) does not match bound schema (1)".
+  auto bound = ParseXmlaChunksForTesting({kBlankFirstRowNoSchemaXml}, true);
+  auto executed =
+      ParseXmlaChunksForTesting({kNamedSchemaBlankFirstRowXml}, false);
+  REQUIRE(bound.columns.size() == 2);
+  REQUIRE(executed.columns.size() == bound.columns.size());
+  REQUIRE(executed.rows.size() == 2);
+  for (auto &row : executed.rows) {
+    REQUIRE(row.size() == bound.columns.size());
+  }
+  REQUIRE(executed.rows[0][0].ToString() == "1");
+  REQUIRE(executed.rows[0][1].IsNull());
+  REQUIRE(executed.rows[1][1].ToString() == "x");
+
+  auto aligned = ParseXmlaChunksForTesting({kNamedSchemaBlankFirstRowXml},
+                                           false, &bound.columns);
+  REQUIRE(aligned.rows.size() == 2);
+  REQUIRE(aligned.rows[0].size() == bound.columns.size());
+  REQUIRE(aligned.rows[1].size() == bound.columns.size());
+  REQUIRE(aligned.rows[0][1].IsNull());
+  REQUIRE(aligned.rows[1][1].ToString() == "x");
+}
+
+TEST_CASE("XMLA binds omitted cells by name not position", "[xmla]") {
+  auto bound = ParseXmlaChunksForTesting({kBlankFirstRowSchemaXml}, true);
+  REQUIRE(bound.columns.size() == 3);
+
+  auto parsed = ParseXmlaChunksForTesting({kShiftedCompactCellsXml}, false,
+                                          &bound.columns);
+  REQUIRE(parsed.rows.size() == 2);
+  REQUIRE(parsed.rows[0].size() == bound.columns.size());
+  REQUIRE(parsed.rows[1].size() == bound.columns.size());
+  REQUIRE(parsed.rows[0][0].IsNull());
+  REQUIRE(parsed.rows[0][1].ToString() == "x");
+  REQUIRE(parsed.rows[0][2].IsNull());
+  REQUIRE(parsed.rows[1][0].ToString() == "2");
+  REQUIRE(parsed.rows[1][1].ToString() == "y");
+  REQUIRE(parsed.rows[1][2].IsNull());
+}

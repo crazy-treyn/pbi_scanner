@@ -176,10 +176,33 @@ static XmlTag ParseTag(const std::string &tag_text) {
   return tag;
 }
 
+// XMLA omits blank cells. Compact names (C0, C00, C11) are positional aliases
+// for the schema column at that ordinal, not "the next cell that appeared".
+static bool IsCompactXmlaCellAlias(const std::string &name) {
+  if (name.size() < 2 || (name[0] != 'C' && name[0] != 'c')) {
+    return false;
+  }
+  for (idx_t i = 1; i < name.size(); i++) {
+    if (name[i] < '0' || name[i] > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static idx_t CompactXmlaCellOrdinal(const std::string &name) {
+  if (!IsCompactXmlaCellAlias(name)) {
+    return DConstants::INVALID_INDEX;
+  }
+  idx_t ordinal = 0;
+  for (idx_t i = 1; i < name.size(); i++) {
+    ordinal = ordinal * 10 + static_cast<idx_t>(name[i] - '0');
+  }
+  return ordinal;
+}
+
 class XmlaStreamParser {
 public:
-  static constexpr idx_t MAX_SCHEMA_INFERENCE_ROWS = 8;
-
   XmlaStreamParser(
       bool stop_after_schema_p,
       std::function<void(const std::vector<XmlaColumn> &columns)> on_schema_p,
@@ -187,12 +210,21 @@ public:
       const std::vector<XmlaColumn> *known_columns_p = nullptr)
       : stop_after_schema(stop_after_schema_p),
         on_schema(std::move(on_schema_p)), on_row(std::move(on_row_p)) {
-    if (known_columns_p) {
-      for (const auto &column : *known_columns_p) {
-        known_column_types[column.name] = column.duckdb_type;
-        known_column_types_by_index.push_back(column.duckdb_type);
-      }
+    if (!known_columns_p || known_columns_p->empty()) {
+      return;
     }
+    columns = *known_columns_p;
+    for (idx_t i = 0; i < columns.size(); i++) {
+      if (columns[i].duckdb_type.id() == LogicalTypeId::SQLNULL) {
+        columns[i].duckdb_type = LogicalType::VARCHAR;
+      }
+      column_indexes[columns[i].name] = i;
+      known_column_types[columns[i].name] = columns[i].duckdb_type;
+      known_column_types_by_index.push_back(columns[i].duckdb_type);
+    }
+    schema_emitted = true;
+    known_schema_locked = true;
+    explicit_schema = true;
   }
 
   bool StartElement(std::string name,
@@ -357,19 +389,79 @@ private:
     if (schema_emitted || columns.empty()) {
       return;
     }
+    column_indexes.clear();
     for (idx_t i = 0; i < columns.size(); i++) {
       if (columns[i].duckdb_type.id() == LogicalTypeId::SQLNULL) {
         columns[i].duckdb_type = LogicalType::VARCHAR;
       }
       column_indexes[columns[i].name] = i;
     }
+    ApplyColumnAliases();
     schema_emitted = true;
     if (on_schema) {
       on_schema(columns);
     }
+    ReplayBufferedRows();
     if (stop_after_schema) {
       stopped_early = true;
     }
+  }
+
+  void NoteColumnAlias(const std::string &alias, idx_t index) {
+    if (alias.empty() || index == DConstants::INVALID_INDEX) {
+      return;
+    }
+    if (schema_emitted) {
+      column_indexes[alias] = index;
+      return;
+    }
+    schema_aliases.emplace_back(alias, index);
+  }
+
+  void ApplyColumnAliases() {
+    for (auto &alias : schema_aliases) {
+      if (!alias.first.empty() && alias.second < columns.size()) {
+        column_indexes[alias.first] = alias.second;
+      }
+    }
+  }
+
+  idx_t FindColumnIndex(const std::string &cell_name) const {
+    auto entry = column_indexes.find(cell_name);
+    if (entry != column_indexes.end()) {
+      return entry->second;
+    }
+    auto ordinal = CompactXmlaCellOrdinal(cell_name);
+    if (ordinal != DConstants::INVALID_INDEX && ordinal < columns.size()) {
+      return ordinal;
+    }
+    return DConstants::INVALID_INDEX;
+  }
+
+  void ReplayBufferedRows() {
+    for (auto &buffered : buffered_rows) {
+      std::vector<Value> row(columns.size(), Value(nullptr));
+      for (auto &entry : buffered) {
+        auto index = FindColumnIndex(entry.first);
+        if (index == DConstants::INVALID_INDEX) {
+          continue;
+        }
+        row[index] = std::move(entry.second);
+      }
+      if (on_row && !on_row(row)) {
+        stopped_early = true;
+        break;
+      }
+    }
+    buffered_rows.clear();
+  }
+
+  void BufferInferredRow() {
+    if (on_row) {
+      buffered_rows.push_back(std::move(current_row));
+    }
+    current_row.clear();
+    current_row_dense.clear();
   }
 
   std::string
@@ -399,7 +491,6 @@ private:
       column.duckdb_type = MergeLogicalTypes(column.duckdb_type, inferred_type);
       column.coercion_kind = CoercionKindFromLogicalType(column.duckdb_type);
     }
-    inferred_row_count++;
   }
 
   void RefineExplicitColumnsFromCurrentRow() {
@@ -461,10 +552,7 @@ private:
       auto cell_name = DecodeXMLName(frame.name);
       idx_t column_index = DConstants::INVALID_INDEX;
       if (schema_emitted) {
-        auto entry = column_indexes.find(cell_name);
-        if (entry != column_indexes.end()) {
-          column_index = entry->second;
-        }
+        column_index = FindColumnIndex(cell_name);
       }
 
       Value value;
@@ -489,8 +577,25 @@ private:
 
     if (frame.name == "element" && inside_schema > 0 &&
         inside_schema_row_complex_type > 0) {
+      auto xml_name = DecodeXMLName(GetAttribute(frame.attributes, "name"));
+      auto field_name = DecodeXMLName(GetAttribute(frame.attributes, "field"));
+      // A bound schema is already fixed. Rowset elements only add aliases so
+      // <C0> still lands on the probed column when the display name differs.
+      if (known_schema_locked) {
+        if (xsd_column_ordinal < columns.size()) {
+          NoteColumnAlias(xml_name, xsd_column_ordinal);
+          NoteColumnAlias(field_name, xsd_column_ordinal);
+        }
+        xsd_column_ordinal++;
+        return;
+      }
       XmlaColumn column;
-      column.name = DecodeXMLName(GetAttribute(frame.attributes, "name"));
+      column.name = xml_name;
+      // sql:field is the unencoded column name. Compact Cxx names are not.
+      if (!field_name.empty() &&
+          (xml_name.empty() || IsCompactXmlaCellAlias(xml_name))) {
+        column.name = field_name;
+      }
       column.source_type = GetAttribute(frame.attributes, "type");
       column.duckdb_type = MapXmlTypeToLogicalType(column.source_type);
       column.coercion_kind = CoercionKindFromXmlType(column.source_type);
@@ -519,14 +624,16 @@ private:
         column.nullable = min_occurs == "0";
         column.nullable_known = true;
       }
+      auto index = columns.size();
       columns.push_back(std::move(column));
+      NoteColumnAlias(xml_name, index);
+      NoteColumnAlias(field_name, index);
+      explicit_schema = true;
       return;
     }
 
     if (frame.name == "schema") {
-      if (stop_after_schema && !columns.empty()) {
-        EmitSchemaIfNeeded();
-      } else if (!stop_after_schema) {
+      if (explicit_schema && !columns.empty()) {
         EmitSchemaIfNeeded();
       }
       return;
@@ -534,17 +641,17 @@ private:
 
     if (frame.name == "row" && inside_schema == 0) {
       if (!schema_emitted) {
-        if (!columns.empty()) {
+        if (explicit_schema) {
           RefineExplicitColumnsFromCurrentRow();
+          BufferInferredRow();
           EmitSchemaIfNeeded();
-        } else {
-          column_indexes.clear();
-          UpdateInferredColumns();
-          if (!stop_after_schema ||
-              inferred_row_count >= MAX_SCHEMA_INFERENCE_ROWS) {
-            EmitSchemaIfNeeded();
-          }
+          return;
         }
+        // Inferred columns are not complete until every row is seen. A column
+        // that is blank in row 1 is omitted from that row's elements.
+        UpdateInferredColumns();
+        BufferInferredRow();
+        return;
       }
       if (stopped_early) {
         current_row.clear();
@@ -562,11 +669,11 @@ private:
 
       std::vector<Value> row(columns.size(), Value(nullptr));
       for (auto &entry : current_row) {
-        auto index = column_indexes.find(entry.first);
-        if (index == column_indexes.end()) {
+        auto index = FindColumnIndex(entry.first);
+        if (index == DConstants::INVALID_INDEX) {
           continue;
         }
-        row[index->second] = std::move(entry.second);
+        row[index] = std::move(entry.second);
       }
       current_row.clear();
       if (on_row && !on_row(row)) {
@@ -621,7 +728,9 @@ private:
   bool stop_after_schema;
   bool schema_emitted = false;
   bool stopped_early = false;
-  idx_t inferred_row_count = 0;
+  bool explicit_schema = false;
+  bool known_schema_locked = false;
+  idx_t xsd_column_ordinal = 0;
   idx_t inside_schema = 0;
   idx_t inside_schema_row_complex_type = 0;
   std::string pending;
@@ -636,6 +745,8 @@ private:
   std::vector<LogicalType> known_column_types_by_index;
   std::vector<std::pair<std::string, Value>> current_row;
   std::vector<Value> current_row_dense;
+  std::vector<std::pair<std::string, idx_t>> schema_aliases;
+  std::vector<std::vector<std::pair<std::string, Value>>> buffered_rows;
   std::function<void(const std::vector<XmlaColumn> &columns)> on_schema;
   std::function<bool(const std::vector<Value> &row)> on_row;
 };
@@ -1886,11 +1997,9 @@ private:
     std::vector<std::string> strings;
     std::vector<ExpandedName> names;
     std::unordered_map<uint32_t, ExpandedName> names_by_id;
-    std::unordered_map<std::string, idx_t> runtime_cell_indexes;
     std::vector<StackEntry> stack;
     std::vector<Value> current_row;
     idx_t inside_schema;
-    idx_t runtime_column_count;
     idx_t produced_rows;
     idx_t cell_trace_count;
     uint32_t pending_name_id;
@@ -1913,11 +2022,9 @@ private:
                        strings,
                        names,
                        names_by_id,
-                       runtime_cell_indexes,
                        stack,
                        current_row,
                        inside_schema,
-                       runtime_column_count,
                        produced_rows,
                        cell_trace_count,
                        pending_name_id,
@@ -1931,11 +2038,9 @@ private:
     strings = state.strings;
     names = state.names;
     names_by_id = state.names_by_id;
-    runtime_cell_indexes = state.runtime_cell_indexes;
     stack = state.stack;
     current_row = state.current_row;
     inside_schema = state.inside_schema;
-    runtime_column_count = state.runtime_column_count;
     produced_rows = state.produced_rows;
     cell_trace_count = state.cell_trace_count;
     pending_name_id = state.pending_name_id;
@@ -2315,39 +2420,18 @@ private:
     return DConstants::INVALID_INDEX;
   }
 
-  static bool IsCompactCellAlias(const std::string &name) {
-    if (name.size() < 2 || (name[0] != 'C' && name[0] != 'c')) {
-      return false;
-    }
-    for (idx_t i = 1; i < name.size(); i++) {
-      if (name[i] < '0' || name[i] > '9') {
-        return false;
-      }
-    }
-    return true;
-  }
-
   idx_t ResolveRuntimeCellColumnIndex(uint32_t name_id) {
     auto resolved = ResolveCellColumnIndex(name_id);
     if (resolved != DConstants::INVALID_INDEX) {
       return resolved;
     }
     auto &name = LookupNameMutable(name_id);
-    if (!IsCompactCellAlias(name.local_name)) {
+    auto ordinal = CompactXmlaCellOrdinal(name.local_name);
+    if (ordinal == DConstants::INVALID_INDEX || ordinal >= columns.size()) {
       return DConstants::INVALID_INDEX;
     }
-    auto entry = runtime_cell_indexes.find(name.local_name);
-    if (entry != runtime_cell_indexes.end()) {
-      name.column_index = entry->second;
-      return entry->second;
-    }
-    if (runtime_column_count >= columns.size()) {
-      return DConstants::INVALID_INDEX;
-    }
-    auto column_index = runtime_column_count++;
-    runtime_cell_indexes[name.local_name] = column_index;
-    name.column_index = column_index;
-    return column_index;
+    name.column_index = ordinal;
+    return ordinal;
   }
 
   void StartElement(uint32_t name_id) {
@@ -2836,11 +2920,9 @@ private:
   std::unordered_map<uint32_t, ExpandedName> names_by_id;
   std::unordered_map<std::string, idx_t> column_indexes;
   std::unordered_map<std::string, idx_t> column_indexes_lower;
-  std::unordered_map<std::string, idx_t> runtime_cell_indexes;
   std::vector<StackEntry> stack;
   std::vector<Value> current_row;
   idx_t inside_schema = 0;
-  idx_t runtime_column_count = 0;
   idx_t produced_rows = 0;
   idx_t cell_trace_count = 0;
   uint32_t pending_name_id = 0;
@@ -3245,7 +3327,8 @@ static void ValidateHttpResponse(const HttpResponse &response,
 
 static std::string BuildXmlaExecuteEnvelopeForTransport(
     const std::string &catalog, const std::string &statement,
-    const std::string &effective_user_name, XmlaTransportMode transport_mode) {
+    const std::string &effective_user_name, XmlaTransportMode transport_mode,
+    bool include_schema) {
   std::string envelope;
   envelope.reserve(catalog.size() + statement.size() +
                    effective_user_name.size() + 512);
@@ -3269,8 +3352,9 @@ static std::string BuildXmlaExecuteEnvelopeForTransport(
     envelope += EscapeXML(Trimmed(effective_user_name));
     envelope += "</EffectiveUserName>";
   }
-  envelope += "<Format>Tabular</Format><Content>Data</Content></PropertyList></"
-              "Properties>";
+  envelope += "<Format>Tabular</Format><Content>";
+  envelope += include_schema ? "SchemaData" : "Data";
+  envelope += "</Content></PropertyList></Properties>";
   envelope += "</Execute></Body></Envelope>";
   return envelope;
 }
@@ -3292,12 +3376,14 @@ std::string BuildXmlaExecuteEnvelope(const std::string &catalog,
                                      const std::string &statement,
                                      const std::string &effective_user_name) {
   return BuildXmlaExecuteEnvelopeForTransport(
-      catalog, statement, effective_user_name, ResolveXmlaTransportMode());
+      catalog, statement, effective_user_name, ResolveXmlaTransportMode(),
+      false);
 }
 
 XmlaParseTestResult
 ParseXmlaChunksForTesting(const std::vector<std::string> &chunks,
-                          bool stop_after_schema) {
+                          bool stop_after_schema,
+                          const std::vector<XmlaColumn> *known_columns) {
   XmlaParseTestResult result;
   XmlaStreamParser parser(
       stop_after_schema,
@@ -3305,7 +3391,8 @@ ParseXmlaChunksForTesting(const std::vector<std::string> &chunks,
       [&](const std::vector<Value> &row) {
         result.rows.push_back(row);
         return true;
-      });
+      },
+      known_columns);
 
   for (const auto &chunk : chunks) {
     if (!parser.Feed(const_data_ptr_cast(chunk.data()), chunk.size())) {
@@ -3392,7 +3479,7 @@ std::vector<XmlaColumn> XmlaExecutor::ProbeSchema(const XmlaRequest &request) {
   auto schema_transport_mode = SchemaProbeTransportMode(transport_mode);
   auto envelope = BuildXmlaExecuteEnvelopeForTransport(
       request.catalog, request.statement, request.effective_user_name,
-      schema_transport_mode);
+      schema_transport_mode, true);
   auto buffer_response = schema_transport_mode != XmlaTransportMode::PLAIN;
   std::string buffered_response;
   std::vector<XmlaColumn> schema;
