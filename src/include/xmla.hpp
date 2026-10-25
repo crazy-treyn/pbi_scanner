@@ -55,9 +55,9 @@ struct XmlaParseTestResult {
 std::string BuildXmlaExecuteEnvelope(const std::string &catalog,
                                      const std::string &statement,
                                      const std::string &effective_user_name);
-XmlaParseTestResult
-ParseXmlaChunksForTesting(const std::vector<std::string> &chunks,
-                          bool stop_after_schema = false);
+XmlaParseTestResult ParseXmlaChunksForTesting(
+    const std::vector<std::string> &chunks, bool stop_after_schema = false,
+    const std::vector<XmlaColumn> *known_columns = nullptr);
 XmlaParseTestResult ParseBinXmlForTesting(const std::string &payload,
                                           bool stop_after_schema = false);
 XmlaParseTestResult ParseStreamingSxRowsForTesting(const std::string &payload,
